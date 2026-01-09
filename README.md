@@ -36,13 +36,33 @@ The command gets the request body on stdin and these environment variables:
 | `HOOK_CONTENT_TYPE`   | `Content-Type` of the request                  |
 | `HOOK_HEADER_<NAME>`  | every request header, e.g. `HOOK_HEADER_X_GITHUB_EVENT` |
 
+## Signatures
+
+With `--secret S` (or `HOOK_SECRET=S` in the environment) every POST must be
+signed with HMAC-SHA256 over the raw body, or it is rejected with `401`:
+
+- `X-Hub-Signature-256: sha256=<hex>`, as sent by GitHub, or
+- `X-Signature: <hex>` (with or without the `sha256=` prefix) for other senders.
+
+Comparison is constant-time. Prefer `HOOK_SECRET` over `--secret` so the secret
+doesn't show up in `ps`; it is not passed on to the command.
+
+Signing a test request by hand:
+
+```sh
+body='{"ref":"refs/heads/main"}'
+sig=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$HOOK_SECRET" | sed 's/^.* //')
+curl -X POST -H "X-Hub-Signature-256: sha256=$sig" -d "$body" localhost:9000/
+```
+
 ## Flags
 
-| Flag            | Default     | Description            |
-|-----------------|-------------|------------------------|
-| `-p`, `--port`  | `9000`      | port to listen on      |
-| `--bind`        | `127.0.0.1` | address to listen on   |
-| `--version`     |             | print version and exit |
+| Flag            | Default     | Description                              |
+|-----------------|-------------|------------------------------------------|
+| `-p`, `--port`  | `9000`      | port to listen on                        |
+| `--bind`        | `127.0.0.1` | address to listen on                     |
+| `--secret`      | `$HOOK_SECRET` | require a valid HMAC-SHA256 signature |
+| `--version`     |             | print version and exit                   |
 
 ## License
 

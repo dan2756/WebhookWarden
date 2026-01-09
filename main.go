@@ -27,6 +27,7 @@ request details in HOOK_* environment variables.
 Flags:
   -p, --port N      port to listen on (default 9000)
       --bind ADDR   address to bind (default 127.0.0.1)
+      --secret S    require a valid HMAC-SHA256 signature (or set HOOK_SECRET)
   -h, --help        show this help
       --version     print the version and exit
 
@@ -38,6 +39,7 @@ Environment passed to the command:
 type config struct {
 	port        int
 	bind        string
+	secret      string
 	argv        []string
 	showVersion bool
 }
@@ -47,7 +49,7 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	cfg, err := parseArgs(args)
+	cfg, err := parseArgs(args, os.Getenv)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
 		fmt.Fprint(stdout, usage)
@@ -68,6 +70,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	log := newLogger(stderr)
 	srv := newServer(cfg, log)
 	log.Printf("listening on http://%s, running %q", ln.Addr(), cfg.argv)
+	if cfg.secret == "" && !isLoopback(cfg.bind) {
+		log.Printf("warning: listening on %s without --secret, anyone who can reach it can run the command", cfg.bind)
+	}
 
 	hs := &http.Server{Handler: srv, ReadHeaderTimeout: 10 * time.Second}
 	if err := hs.Serve(ln); err != nil {
@@ -77,13 +82,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func parseArgs(args []string) (*config, error) {
+func parseArgs(args []string, getenv func(string) string) (*config, error) {
 	cfg := &config{}
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.IntVar(&cfg.port, "p", 9000, "")
 	fs.IntVar(&cfg.port, "port", 9000, "")
 	fs.StringVar(&cfg.bind, "bind", "127.0.0.1", "")
+	fs.StringVar(&cfg.secret, "secret", getenv("HOOK_SECRET"), "")
 	fs.BoolVar(&cfg.showVersion, "version", false, "")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -110,6 +116,14 @@ func parseArgs(args []string) (*config, error) {
 		cfg.argv = rest
 	}
 	return cfg, nil
+}
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func version() string {

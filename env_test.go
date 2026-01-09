@@ -28,7 +28,7 @@ func TestBuildEnv(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("X-GitHub-Event", "push")
 
-	env := buildEnv([]string{"PATH=/usr/bin"}, r)
+	env := buildEnv([]string{"PATH=/usr/bin", "HOOK_SECRET=s3cret", "HOOK_HEADER_STALE=1"}, r)
 	want := []string{
 		"PATH=/usr/bin",
 		"HOOK_METHOD=POST",
@@ -42,6 +42,11 @@ func TestBuildEnv(t *testing.T) {
 	for _, kv := range want {
 		if !slices.Contains(env, kv) {
 			t.Errorf("env is missing %q\ngot: %q", kv, env)
+		}
+	}
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "HOOK_SECRET=") || strings.HasPrefix(kv, "HOOK_HEADER_STALE=") {
+			t.Errorf("inherited %q should not be passed to the command", kv)
 		}
 	}
 }

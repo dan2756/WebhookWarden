@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+func noenv(string) string { return "" }
+
 func TestParseArgsCommand(t *testing.T) {
 	tests := []struct {
 		args []string
@@ -19,7 +21,7 @@ func TestParseArgsCommand(t *testing.T) {
 		{[]string{"./deploy.sh", "-x"}, []string{"./deploy.sh", "-x"}},
 	}
 	for _, tt := range tests {
-		cfg, err := parseArgs(tt.args)
+		cfg, err := parseArgs(tt.args, noenv)
 		if err != nil {
 			t.Errorf("parseArgs(%q): %v", tt.args, err)
 			continue
@@ -31,7 +33,7 @@ func TestParseArgsCommand(t *testing.T) {
 }
 
 func TestParseArgsFlags(t *testing.T) {
-	cfg, err := parseArgs([]string{"--port", "8080", "--bind", "0.0.0.0", "true"})
+	cfg, err := parseArgs([]string{"--port", "8080", "--bind", "0.0.0.0", "true"}, noenv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,12 +41,35 @@ func TestParseArgsFlags(t *testing.T) {
 		t.Errorf("got port %d bind %q", cfg.port, cfg.bind)
 	}
 
-	cfg, err = parseArgs([]string{"true"})
+	cfg, err = parseArgs([]string{"true"}, noenv)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.port != 9000 || cfg.bind != "127.0.0.1" {
 		t.Errorf("defaults: got port %d bind %q", cfg.port, cfg.bind)
+	}
+}
+
+func TestParseArgsSecret(t *testing.T) {
+	env := func(k string) string {
+		if k == "HOOK_SECRET" {
+			return "from-env"
+		}
+		return ""
+	}
+	cfg, err := parseArgs([]string{"true"}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.secret != "from-env" {
+		t.Errorf("secret = %q, want HOOK_SECRET value", cfg.secret)
+	}
+	cfg, err = parseArgs([]string{"--secret", "from-flag", "true"}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.secret != "from-flag" {
+		t.Errorf("secret = %q, want --secret to win over HOOK_SECRET", cfg.secret)
 	}
 }
 
@@ -56,11 +81,11 @@ func TestParseArgsErrors(t *testing.T) {
 		{"-p", "70000", "true"},
 		{"--nope", "true"},
 	} {
-		if _, err := parseArgs(args); err == nil {
+		if _, err := parseArgs(args, noenv); err == nil {
 			t.Errorf("parseArgs(%q) succeeded, want error", args)
 		}
 	}
-	if _, err := parseArgs([]string{"-h"}); !errors.Is(err, flag.ErrHelp) {
+	if _, err := parseArgs([]string{"-h"}, noenv); !errors.Is(err, flag.ErrHelp) {
 		t.Errorf("-h: got %v, want flag.ErrHelp", err)
 	}
 }

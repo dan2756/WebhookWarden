@@ -44,6 +44,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.reply(w, r, http.StatusBadRequest, "reading body: "+err.Error())
 		return
 	}
+	if s.cfg.secret != "" && !verifySignature([]byte(s.cfg.secret), r.Header, body) {
+		s.reply(w, r, http.StatusUnauthorized, "invalid or missing signature")
+		return
+	}
 
 	j := &job{
 		id:     s.nextID.Add(1),
