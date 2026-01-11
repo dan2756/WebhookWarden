@@ -23,7 +23,19 @@ hook -p 9000 'make deploy && say done'
 ```
 
 Each POST is answered with `202 Accepted` right away and the command runs in
-the background. Runs never overlap. Other methods get `405`.
+the background. Runs never overlap.
+
+By default any path is accepted. `--path /deploy` restricts hook to that one
+path; everything else gets `404`. Methods other than POST get `405`, except
+`GET /` (or `GET /deploy` with `--path`), which returns a small status
+document:
+
+```console
+$ curl -s localhost:9000/
+{"runs":12,"last_exit_code":0,"last_run":"2026-01-11T21:04:51Z"}
+```
+
+`last_exit_code` and `last_run` are `null` until the first run has finished.
 
 The command gets the request body on stdin and these environment variables:
 
@@ -61,6 +73,7 @@ curl -X POST -H "X-Hub-Signature-256: sha256=$sig" -d "$body" localhost:9000/
 |-----------------|-------------|------------------------------------------|
 | `-p`, `--port`  | `9000`      | port to listen on                        |
 | `--bind`        | `127.0.0.1` | address to listen on                     |
+| `--path`        |             | only accept this path, `404` for others  |
 | `--secret`      | `$HOOK_SECRET` | require a valid HMAC-SHA256 signature |
 | `--version`     |             | print version and exit                   |
 

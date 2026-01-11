@@ -80,6 +80,7 @@ func TestParseArgsErrors(t *testing.T) {
 		{"--"},
 		{"-p", "70000", "true"},
 		{"--nope", "true"},
+		{"--path", "deploy", "true"},
 	} {
 		if _, err := parseArgs(args, noenv); err == nil {
 			t.Errorf("parseArgs(%q) succeeded, want error", args)

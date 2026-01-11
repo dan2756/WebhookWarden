@@ -12,6 +12,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -22,11 +23,13 @@ Usage:
   hook [flags] '<shell command>'        run a single string with sh -c
 
 Each POST runs the command once, with the request body on stdin and the
-request details in HOOK_* environment variables.
+request details in HOOK_* environment variables. GET on / (or on --path)
+returns a small JSON status document; other methods get 405.
 
 Flags:
   -p, --port N      port to listen on (default 9000)
       --bind ADDR   address to bind (default 127.0.0.1)
+      --path PATH   only serve PATH; any other path is 404
       --secret S    require a valid HMAC-SHA256 signature (or set HOOK_SECRET)
   -h, --help        show this help
       --version     print the version and exit
@@ -39,6 +42,7 @@ Environment passed to the command:
 type config struct {
 	port        int
 	bind        string
+	path        string
 	secret      string
 	argv        []string
 	showVersion bool
@@ -69,7 +73,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	log := newLogger(stderr)
 	srv := newServer(cfg, log)
-	log.Printf("listening on http://%s, running %q", ln.Addr(), cfg.argv)
+	log.Printf("listening on http://%s%s, running %q", ln.Addr(), cfg.path, cfg.argv)
 	if cfg.secret == "" && !isLoopback(cfg.bind) {
 		log.Printf("warning: listening on %s without --secret, anyone who can reach it can run the command", cfg.bind)
 	}
@@ -89,6 +93,7 @@ func parseArgs(args []string, getenv func(string) string) (*config, error) {
 	fs.IntVar(&cfg.port, "p", 9000, "")
 	fs.IntVar(&cfg.port, "port", 9000, "")
 	fs.StringVar(&cfg.bind, "bind", "127.0.0.1", "")
+	fs.StringVar(&cfg.path, "path", "", "")
 	fs.StringVar(&cfg.secret, "secret", getenv("HOOK_SECRET"), "")
 	fs.BoolVar(&cfg.showVersion, "version", false, "")
 	if err := fs.Parse(args); err != nil {
@@ -99,6 +104,9 @@ func parseArgs(args []string, getenv func(string) string) (*config, error) {
 	}
 	if cfg.port < 0 || cfg.port > 65535 {
 		return nil, fmt.Errorf("invalid port %d", cfg.port)
+	}
+	if cfg.path != "" && !strings.HasPrefix(cfg.path, "/") {
+		return nil, fmt.Errorf("--path must start with /, got %q", cfg.path)
 	}
 
 	rest := fs.Args()

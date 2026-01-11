@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,8 +16,14 @@ type server struct {
 	log *logger
 	out io.Writer // where the command's output goes
 
-	mu     sync.Mutex // held while a command runs, so runs never overlap
+	runMu  sync.Mutex // held while a command runs, so runs never overlap
+	wg     sync.WaitGroup
 	nextID atomic.Int64
+
+	mu       sync.Mutex // guards the fields below
+	runs     int
+	lastExit int
+	lastRun  time.Time
 }
 
 // job is one accepted request waiting to run.
@@ -33,12 +40,34 @@ func newServer(cfg *config, log *logger) *server {
 	return &server{cfg: cfg, log: log, out: log.w}
 }
 
+// statusPath is where GET returns the status document.
+func (s *server) statusPath() string {
+	if s.cfg.path != "" {
+		return s.cfg.path
+	}
+	return "/"
+}
+
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.path != "" && r.URL.Path != s.cfg.path {
+		s.reply(w, r, http.StatusNotFound, "not found")
+		return
+	}
 	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
+		onStatusPath := r.URL.Path == s.statusPath()
+		if onStatusPath && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			s.serveStatus(w, r)
+			return
+		}
+		if onStatusPath {
+			w.Header().Set("Allow", "GET, HEAD, POST")
+		} else {
+			w.Header().Set("Allow", http.MethodPost)
+		}
 		s.reply(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.reply(w, r, http.StatusBadRequest, "reading body: "+err.Error())
@@ -61,20 +90,63 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 	fmt.Fprintf(w, "accepted: run #%d\n", j.id)
 
+	s.wg.Add(1)
 	go s.runJob(j)
 }
 
 func (s *server) runJob(j *job) {
-	s.mu.Lock()
+	defer s.wg.Done()
+	s.runMu.Lock()
 	res := s.execute(j)
-	s.mu.Unlock()
+	s.runMu.Unlock()
+	s.record(res)
 	s.logRun(j, http.StatusAccepted, res)
+}
+
+// wait blocks until all background runs have finished.
+func (s *server) wait() { s.wg.Wait() }
+
+func (s *server) record(res result) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runs++
+	s.lastExit = res.exitCode
+	s.lastRun = time.Now()
+}
+
+type statusReport struct {
+	Runs         int        `json:"runs"`
+	LastExitCode *int       `json:"last_exit_code"`
+	LastRun      *time.Time `json:"last_run"`
+}
+
+func (s *server) status() statusReport {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := statusReport{Runs: s.runs}
+	if s.runs > 0 {
+		code, at := s.lastExit, s.lastRun.UTC().Truncate(time.Second)
+		st.LastExitCode, st.LastRun = &code, &at
+	}
+	return st
+}
+
+func (s *server) serveStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(s.status())
+	s.logRequest(r, http.StatusOK)
 }
 
 func (s *server) reply(w http.ResponseWriter, r *http.Request, status int, msg string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(status)
 	fmt.Fprintln(w, msg)
+	s.logRequest(r, status)
+}
+
+func (s *server) logRequest(r *http.Request, status int) {
 	s.log.Printf("%s %s %s %d", r.RemoteAddr, r.Method, r.URL.Path, status)
 }
 
