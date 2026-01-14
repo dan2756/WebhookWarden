@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,7 +15,6 @@ import (
 type server struct {
 	cfg *config
 	log *logger
-	out io.Writer // where the command's output goes
 
 	runMu  sync.Mutex // held while a command runs, so runs never overlap
 	wg     sync.WaitGroup
@@ -37,7 +37,7 @@ type job struct {
 }
 
 func newServer(cfg *config, log *logger) *server {
-	return &server{cfg: cfg, log: log, out: log.w}
+	return &server{cfg: cfg, log: log}
 }
 
 // statusPath is where GET returns the status document.
@@ -87,20 +87,40 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		env:    buildEnv(os.Environ(), r),
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusAccepted)
-	fmt.Fprintf(w, "accepted: run #%d\n", j.id)
+	w.Header().Set("X-Hook-Run", strconv.FormatInt(j.id, 10))
 
-	s.wg.Add(1)
-	go s.runJob(j)
+	if !s.cfg.sync {
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprintf(w, "accepted: run #%d\n", j.id)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.logRun(j, http.StatusAccepted, s.runJob(j))
+		}()
+		return
+	}
+
+	res := s.runJob(j)
+	code := http.StatusOK
+	if res.exitCode != 0 {
+		code = http.StatusInternalServerError
+	}
+	w.Header().Set("X-Hook-Exit-Code", strconv.Itoa(res.exitCode))
+	w.WriteHeader(code)
+	w.Write(res.output)
+	if res.truncated {
+		fmt.Fprintf(w, "\nhook: output truncated to %d bytes\n", maxCapture)
+	}
+	s.logRun(j, code, res)
 }
 
-func (s *server) runJob(j *job) {
-	defer s.wg.Done()
+// runJob runs j once no other run is in progress and records the result.
+func (s *server) runJob(j *job) result {
 	s.runMu.Lock()
 	res := s.execute(j)
 	s.runMu.Unlock()
 	s.record(res)
-	s.logRun(j, http.StatusAccepted, res)
+	return res
 }
 
 // wait blocks until all background runs have finished.

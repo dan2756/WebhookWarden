@@ -167,3 +167,111 @@ func TestAccessLog(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncOutput(t *testing.T) {
+	s, _ := newTestServer(t, config{sync: true, argv: []string{"sh", "-c", "echo out; echo err >&2; echo again"}})
+	w := do(s, "POST", "/", "", nil)
+	if w.Code != 200 {
+		t.Errorf("status %d, want 200", w.Code)
+	}
+	if got := w.Header().Get("X-Hook-Exit-Code"); got != "0" {
+		t.Errorf("X-Hook-Exit-Code = %q, want 0", got)
+	}
+	if got := w.Header().Get("X-Hook-Run"); got != "1" {
+		t.Errorf("X-Hook-Run = %q, want 1", got)
+	}
+	if got, want := w.Body.String(), "out\nerr\nagain\n"; got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+func TestSyncFailure(t *testing.T) {
+	s, _ := newTestServer(t, config{sync: true, argv: []string{"sh", "-c", "echo boom >&2; exit 3"}})
+	w := do(s, "POST", "/", "", nil)
+	if w.Code != 500 {
+		t.Errorf("status %d, want 500", w.Code)
+	}
+	if got := w.Header().Get("X-Hook-Exit-Code"); got != "3" {
+		t.Errorf("X-Hook-Exit-Code = %q, want 3", got)
+	}
+	if got := w.Body.String(); got != "boom\n" {
+		t.Errorf("body = %q, want %q", got, "boom\n")
+	}
+}
+
+func TestSyncCommandNotFound(t *testing.T) {
+	s, _ := newTestServer(t, config{sync: true, argv: []string{"./does-not-exist"}})
+	w := do(s, "POST", "/", "", nil)
+	if w.Code != 500 || w.Header().Get("X-Hook-Exit-Code") != "127" {
+		t.Errorf("status %d, exit %q; want 500 and 127", w.Code, w.Header().Get("X-Hook-Exit-Code"))
+	}
+	if !strings.Contains(w.Body.String(), "does-not-exist") {
+		t.Errorf("body should explain the failure, got %q", w.Body.String())
+	}
+}
+
+func TestEnvAndStdin(t *testing.T) {
+	script := `printf '%s\n' "$HOOK_METHOD" "$HOOK_PATH" "$HOOK_QUERY" "$HOOK_CONTENT_TYPE" ` +
+		`"$HOOK_HEADER_X_GITHUB_EVENT" "$HOOK_HEADER_X_GITHUB_DELIVERY" "${HOOK_SECRET-unset}"; cat`
+	s, _ := newTestServer(t, config{sync: true, secret: "s3cret", argv: []string{"sh", "-c", script}})
+
+	body := `{"ref":"refs/heads/main"}`
+	h := http.Header{
+		"Content-Type":        {"application/json"},
+		"X-Github-Event":      {"push"},
+		"X-Github-Delivery":   {"72d3162e-cc78-11e3-81ab-4c9367dc0958"},
+		"X-Hub-Signature-256": {"sha256=" + sign("s3cret", body)},
+	}
+	w := do(s, "POST", "/deploy?env=prod", body, h)
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	want := strings.Join([]string{
+		"POST",
+		"/deploy",
+		"env=prod",
+		"application/json",
+		"push",
+		"72d3162e-cc78-11e3-81ab-4c9367dc0958",
+		"unset",
+		body,
+	}, "\n")
+	if got := w.Body.String(); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRemoteAddrOverHTTP(t *testing.T) {
+	s, _ := newTestServer(t, config{sync: true, argv: []string{"sh", "-c", `printf %s "$HOOK_REMOTE_ADDR"`}})
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/", "text/plain", strings.NewReader("hi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got bytes.Buffer
+	got.ReadFrom(resp.Body)
+	if !strings.HasPrefix(got.String(), "127.0.0.1:") {
+		t.Errorf("HOOK_REMOTE_ADDR = %q, want 127.0.0.1:<port>", got.String())
+	}
+}
+
+func TestOutputForwarding(t *testing.T) {
+	s, logs := newTestServer(t, config{argv: []string{"sh", "-c", "echo one; echo two >&2; printf three"}})
+	do(s, "POST", "/", "", nil)
+	s.wait()
+	if !strings.Contains(logs.String(), "[#1] one\n[#1] two\n[#1] three\n") {
+		t.Errorf("output not forwarded with prefix:\n%s", logs.String())
+	}
+
+	s, logs = newTestServer(t, config{quiet: true, sync: true, argv: []string{"echo", "secret output"}})
+	w := do(s, "POST", "/", "", nil)
+	if strings.Contains(logs.String(), "secret output") {
+		t.Errorf("-q should not forward output:\n%s", logs.String())
+	}
+	if w.Body.String() != "secret output\n" {
+		t.Errorf("-q --sync should still return output, got %q", w.Body.String())
+	}
+}

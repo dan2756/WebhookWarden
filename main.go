@@ -31,6 +31,9 @@ Flags:
       --bind ADDR   address to bind (default 127.0.0.1)
       --path PATH   only serve PATH; any other path is 404
       --secret S    require a valid HMAC-SHA256 signature (or set HOOK_SECRET)
+      --sync        wait for the command and respond with its output
+                    (200 on success, 500 on a non-zero exit)
+  -q, --quiet       don't forward the command's output to stderr
   -h, --help        show this help
       --version     print the version and exit
 
@@ -44,6 +47,8 @@ type config struct {
 	bind        string
 	path        string
 	secret      string
+	sync        bool
+	quiet       bool
 	argv        []string
 	showVersion bool
 }
@@ -95,6 +100,9 @@ func parseArgs(args []string, getenv func(string) string) (*config, error) {
 	fs.StringVar(&cfg.bind, "bind", "127.0.0.1", "")
 	fs.StringVar(&cfg.path, "path", "", "")
 	fs.StringVar(&cfg.secret, "secret", getenv("HOOK_SECRET"), "")
+	fs.BoolVar(&cfg.sync, "sync", false, "")
+	fs.BoolVar(&cfg.quiet, "q", false, "")
+	fs.BoolVar(&cfg.quiet, "quiet", false, "")
 	fs.BoolVar(&cfg.showVersion, "version", false, "")
 	if err := fs.Parse(args); err != nil {
 		return nil, err

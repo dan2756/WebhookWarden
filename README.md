@@ -25,6 +25,21 @@ hook -p 9000 'make deploy && say done'
 Each POST is answered with `202 Accepted` right away and the command runs in
 the background. Runs never overlap.
 
+With `--sync`, hook waits for the command and answers with its combined
+stdout and stderr: `200` if it exited 0, `500` otherwise. The exit code is in
+the `X-Hook-Exit-Code` header either way (`127` if the command could not be
+started). Every response also carries the run number in `X-Hook-Run`.
+
+```console
+$ hook --sync 'git -C /srv/site pull --ff-only'
+$ curl -si -X POST localhost:9000/
+HTTP/1.1 200 OK
+X-Hook-Exit-Code: 0
+X-Hook-Run: 1
+
+Already up to date.
+```
+
 By default any path is accepted. `--path /deploy` restricts hook to that one
 path; everything else gets `404`. Methods other than POST get `405`, except
 `GET /` (or `GET /deploy` with `--path`), which returns a small status
@@ -47,6 +62,22 @@ The command gets the request body on stdin and these environment variables:
 | `HOOK_REMOTE_ADDR`    | client address, `ip:port`                      |
 | `HOOK_CONTENT_TYPE`   | `Content-Type` of the request                  |
 | `HOOK_HEADER_<NAME>`  | every request header, e.g. `HOOK_HEADER_X_GITHUB_EVENT` |
+
+## Logging
+
+hook logs to stderr: one access line per request, and the command's output
+with each line prefixed by its run number (`-q` turns the latter off).
+
+```
+2026-01-14T19:20:03Z listening on http://127.0.0.1:9000/deploy, running ["./deploy.sh"]
+[#1] Fetching origin
+[#1] Deployed 3f2a9c1
+2026-01-14T19:20:05Z 127.0.0.1:52144 POST /deploy 202 #1 1.874s exit=0
+2026-01-14T19:20:09Z 127.0.0.1:52150 GET /deploy 200
+```
+
+For runs, the access line is written when the run finishes and includes its
+duration and exit code.
 
 ## Signatures
 
@@ -75,6 +106,8 @@ curl -X POST -H "X-Hub-Signature-256: sha256=$sig" -d "$body" localhost:9000/
 | `--bind`        | `127.0.0.1` | address to listen on                     |
 | `--path`        |             | only accept this path, `404` for others  |
 | `--secret`      | `$HOOK_SECRET` | require a valid HMAC-SHA256 signature |
+| `--sync`        |             | wait and respond with the command's output |
+| `-q`, `--quiet` |             | don't forward the command's output       |
 | `--version`     |             | print version and exit                   |
 
 ## License
