@@ -8,17 +8,14 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
 type server struct {
-	cfg *config
-	log *logger
-
-	runMu  sync.Mutex // held while a command runs, so runs never overlap
-	wg     sync.WaitGroup
-	nextID atomic.Int64
+	cfg   *config
+	log   *logger
+	queue *queue
+	exec  func(*job) result // runs the command; replaced in tests
 
 	mu       sync.Mutex // guards the fields below
 	runs     int
@@ -28,16 +25,24 @@ type server struct {
 
 // job is one accepted request waiting to run.
 type job struct {
-	id     int64
+	id     int64 // assigned by the queue
 	remote string
 	method string
 	path   string
 	body   []byte
 	env    []string
+	done   chan result // set for --sync requests, which wait for the result
 }
 
 func newServer(cfg *config, log *logger) *server {
-	return &server{cfg: cfg, log: log}
+	s := &server{cfg: cfg, log: log}
+	s.exec = s.execute
+	workers := 1
+	if cfg.concurrent {
+		workers = 0
+	}
+	s.queue = newQueue(workers, cfg.maxQueue, s.runJob)
+	return s
 }
 
 // statusPath is where GET returns the status document.
@@ -79,12 +84,18 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	j := &job{
-		id:     s.nextID.Add(1),
 		remote: r.RemoteAddr,
 		method: r.Method,
 		path:   r.URL.Path,
 		body:   body,
 		env:    buildEnv(os.Environ(), r),
+	}
+	if s.cfg.sync {
+		j.done = make(chan result, 1)
+	}
+	if err := s.queue.submit(j); err != nil {
+		s.reply(w, r, http.StatusServiceUnavailable, err.Error())
+		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-Hook-Run", strconv.FormatInt(j.id, 10))
@@ -92,15 +103,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.cfg.sync {
 		w.WriteHeader(http.StatusAccepted)
 		fmt.Fprintf(w, "accepted: run #%d\n", j.id)
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			s.logRun(j, http.StatusAccepted, s.runJob(j))
-		}()
 		return
 	}
 
-	res := s.runJob(j)
+	res := <-j.done
 	code := http.StatusOK
 	if res.exitCode != 0 {
 		code = http.StatusInternalServerError
@@ -114,17 +120,19 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.logRun(j, code, res)
 }
 
-// runJob runs j once no other run is in progress and records the result.
-func (s *server) runJob(j *job) result {
-	s.runMu.Lock()
-	res := s.execute(j)
-	s.runMu.Unlock()
+// runJob is called by the queue when it is j's turn.
+func (s *server) runJob(j *job) {
+	res := s.exec(j)
 	s.record(res)
-	return res
+	if j.done != nil {
+		j.done <- res // the handler logs and responds
+		return
+	}
+	s.logRun(j, http.StatusAccepted, res)
 }
 
-// wait blocks until all background runs have finished.
-func (s *server) wait() { s.wg.Wait() }
+// wait blocks until all queued runs have finished.
+func (s *server) wait() { s.queue.wait() }
 
 func (s *server) record(res result) {
 	s.mu.Lock()
@@ -136,6 +144,8 @@ func (s *server) record(res result) {
 
 type statusReport struct {
 	Runs         int        `json:"runs"`
+	Running      int        `json:"running"`
+	Queued       int        `json:"queued"`
 	LastExitCode *int       `json:"last_exit_code"`
 	LastRun      *time.Time `json:"last_run"`
 }
@@ -144,6 +154,7 @@ func (s *server) status() statusReport {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := statusReport{Runs: s.runs}
+	st.Running, st.Queued = s.queue.stats()
 	if s.runs > 0 {
 		code, at := s.lastExit, s.lastRun.UTC().Truncate(time.Second)
 		st.LastExitCode, st.LastRun = &code, &at

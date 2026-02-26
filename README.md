@@ -23,7 +23,48 @@ hook -p 9000 'make deploy && say done'
 ```
 
 Each POST is answered with `202 Accepted` right away and the command runs in
-the background. Runs never overlap.
+the background.
+
+## What the command gets
+
+The request body is piped to the command's stdin, and the request details
+are in these environment variables:
+
+| Variable              | Value                                          |
+|-----------------------|------------------------------------------------|
+| `HOOK_METHOD`         | request method                                 |
+| `HOOK_PATH`           | URL path, e.g. `/deploy`                       |
+| `HOOK_QUERY`          | raw query string, without the `?`              |
+| `HOOK_REMOTE_ADDR`    | client address, `ip:port`                      |
+| `HOOK_CONTENT_TYPE`   | `Content-Type` of the request                  |
+| `HOOK_HEADER_<NAME>`  | every request header, e.g. `HOOK_HEADER_X_GITHUB_EVENT` |
+
+## Paths and status
+
+By default any path is accepted. `--path /deploy` restricts hook to that one
+path; everything else gets `404`. Methods other than POST get `405`, except
+`GET /` (or `GET /deploy` with `--path`), which returns a small status
+document:
+
+```console
+$ curl -s localhost:9000/
+{"runs":12,"running":1,"queued":0,"last_exit_code":0,"last_run":"2026-01-11T21:04:51Z"}
+```
+
+`last_exit_code` and `last_run` are `null` until the first run has finished.
+
+## Queueing
+
+Runs go through a queue and execute one at a time, in the order the requests
+arrived, so two pushes in quick succession never deploy on top of each other.
+`--concurrent` lets runs overlap instead.
+
+`--max-queue N` (default 100) caps how many runs may be pending at once,
+counting the running ones. Requests beyond that get `503`. With
+`--max-queue 1`, a push that arrives while a deploy is running is refused
+rather than queued; with `--max-queue 2`, at most one waits behind it.
+
+## Sync mode
 
 With `--sync`, hook waits for the command and answers with its combined
 stdout and stderr: `200` if it exited 0, `500` otherwise. The exit code is in
@@ -39,29 +80,6 @@ X-Hook-Run: 1
 
 Already up to date.
 ```
-
-By default any path is accepted. `--path /deploy` restricts hook to that one
-path; everything else gets `404`. Methods other than POST get `405`, except
-`GET /` (or `GET /deploy` with `--path`), which returns a small status
-document:
-
-```console
-$ curl -s localhost:9000/
-{"runs":12,"last_exit_code":0,"last_run":"2026-01-11T21:04:51Z"}
-```
-
-`last_exit_code` and `last_run` are `null` until the first run has finished.
-
-The command gets the request body on stdin and these environment variables:
-
-| Variable              | Value                                          |
-|-----------------------|------------------------------------------------|
-| `HOOK_METHOD`         | request method                                 |
-| `HOOK_PATH`           | URL path, e.g. `/deploy`                       |
-| `HOOK_QUERY`          | raw query string, without the `?`              |
-| `HOOK_REMOTE_ADDR`    | client address, `ip:port`                      |
-| `HOOK_CONTENT_TYPE`   | `Content-Type` of the request                  |
-| `HOOK_HEADER_<NAME>`  | every request header, e.g. `HOOK_HEADER_X_GITHUB_EVENT` |
 
 ## Logging
 
@@ -107,6 +125,8 @@ curl -X POST -H "X-Hub-Signature-256: sha256=$sig" -d "$body" localhost:9000/
 | `--path`        |             | only accept this path, `404` for others  |
 | `--secret`      | `$HOOK_SECRET` | require a valid HMAC-SHA256 signature |
 | `--sync`        |             | wait and respond with the command's output |
+| `--concurrent`  |             | let runs overlap instead of queueing     |
+| `--max-queue`   | `100`       | `503` once this many runs are pending (0 = no limit) |
 | `-q`, `--quiet` |             | don't forward the command's output       |
 | `--version`     |             | print version and exit                   |
 

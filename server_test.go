@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // syncBuffer is a bytes.Buffer that is safe to write from the logger and
@@ -38,6 +40,18 @@ func newTestServer(t *testing.T, cfg config) (*server, *syncBuffer) {
 	s := newServer(&cfg, newLogger(logs))
 	t.Cleanup(s.wait)
 	return s, logs
+}
+
+// waitUntil polls cond until it is true, failing the test after a few seconds.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func do(s http.Handler, method, target, body string, header http.Header) *httptest.ResponseRecorder {
@@ -273,5 +287,56 @@ func TestOutputForwarding(t *testing.T) {
 	}
 	if w.Body.String() != "secret output\n" {
 		t.Errorf("-q --sync should still return output, got %q", w.Body.String())
+	}
+}
+
+func TestQueueFullReturns503(t *testing.T) {
+	s, _ := newTestServer(t, config{maxQueue: 1})
+	release := make(chan struct{})
+	s.exec = func(*job) result {
+		<-release
+		return result{}
+	}
+
+	if w := do(s, "POST", "/", "", nil); w.Code != 202 {
+		t.Fatalf("first POST: status %d, want 202", w.Code)
+	}
+	if w := do(s, "POST", "/", "", nil); w.Code != 503 {
+		t.Errorf("second POST: status %d, want 503", w.Code)
+	}
+	if st := getStatus(t, s, "/"); st.Running != 1 || st.Queued != 0 {
+		t.Errorf("status: running %d queued %d, want 1 and 0", st.Running, st.Queued)
+	}
+
+	close(release)
+	s.wait()
+	if w := do(s, "POST", "/", "", nil); w.Code != 202 {
+		t.Errorf("POST after the run finished: status %d, want 202", w.Code)
+	}
+}
+
+func TestSyncWaitsForItsTurn(t *testing.T) {
+	s, _ := newTestServer(t, config{sync: true})
+	release := make(chan struct{})
+	s.exec = func(j *job) result {
+		if j.id == 1 {
+			<-release
+		}
+		return result{output: []byte(fmt.Sprintf("run %d\n", j.id))}
+	}
+
+	first := make(chan *httptest.ResponseRecorder)
+	go func() { first <- do(s, "POST", "/", "", nil) }()
+	waitUntil(t, "first run to start", func() bool { return s.status().Running == 1 })
+	second := make(chan *httptest.ResponseRecorder)
+	go func() { second <- do(s, "POST", "/", "", nil) }()
+	waitUntil(t, "second run to queue", func() bool { return s.status().Queued == 1 })
+
+	close(release)
+	if w := <-first; w.Body.String() != "run 1\n" {
+		t.Errorf("first response %q", w.Body.String())
+	}
+	if w := <-second; w.Body.String() != "run 2\n" {
+		t.Errorf("second response %q", w.Body.String())
 	}
 }
