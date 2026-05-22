@@ -38,6 +38,10 @@ Flags:
       --concurrent      let runs overlap instead of queueing them
       --max-queue N     answer 503 while N runs are running or waiting
                         (default 100, 0 = no limit)
+      --timeout D       kill a run that takes longer than D, e.g. 30s or 5m
+                        (default 0, no limit)
+      --max-body SIZE   answer 413 to bodies larger than SIZE (default 10MB,
+                        0 = no limit)
   -q, --quiet           don't forward the command's output to stderr
   -h, --help            show this help
       --version         print the version and exit
@@ -55,6 +59,8 @@ type config struct {
 	sync        bool
 	concurrent  bool
 	maxQueue    int
+	timeout     time.Duration
+	maxBody     int64
 	quiet       bool
 	argv        []string
 	showVersion bool
@@ -110,12 +116,16 @@ func parseArgs(args []string, getenv func(string) string) (*config, error) {
 	fs.BoolVar(&cfg.sync, "sync", false, "")
 	fs.BoolVar(&cfg.concurrent, "concurrent", false, "")
 	fs.IntVar(&cfg.maxQueue, "max-queue", 100, "")
+	fs.DurationVar(&cfg.timeout, "timeout", 0, "")
+	maxBody := byteSize(10 << 20)
+	fs.Var(&maxBody, "max-body", "")
 	fs.BoolVar(&cfg.quiet, "q", false, "")
 	fs.BoolVar(&cfg.quiet, "quiet", false, "")
 	fs.BoolVar(&cfg.showVersion, "version", false, "")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
+	cfg.maxBody = int64(maxBody)
 	if cfg.showVersion {
 		return cfg, nil
 	}
@@ -124,6 +134,9 @@ func parseArgs(args []string, getenv func(string) string) (*config, error) {
 	}
 	if cfg.maxQueue < 0 {
 		return nil, fmt.Errorf("invalid --max-queue %d", cfg.maxQueue)
+	}
+	if cfg.timeout < 0 {
+		return nil, fmt.Errorf("invalid --timeout %s", cfg.timeout)
 	}
 	if cfg.path != "" && !strings.HasPrefix(cfg.path, "/") {
 		return nil, fmt.Errorf("--path must start with /, got %q", cfg.path)

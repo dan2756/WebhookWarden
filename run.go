@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -15,6 +17,13 @@ const (
 	// maxLine bounds how long a forwarded output line can get before it is
 	// flushed anyway.
 	maxLine = 64 << 10
+	// waitDelay is how long to keep reading output after the command has
+	// exited or been killed. A background process that inherited stdout
+	// would otherwise hold up the run (and the queue) until it exits.
+	waitDelay = 2 * time.Second
+	// exitTimeout is reported when --timeout killed the command, like
+	// timeout(1) does.
+	exitTimeout = 124
 )
 
 type result struct {
@@ -25,8 +34,16 @@ type result struct {
 }
 
 // execute runs the configured command for j and waits for it to finish.
-func (s *server) execute(j *job) result {
-	cmd := exec.Command(s.cfg.argv[0], s.cfg.argv[1:]...)
+// Cancelling ctx kills the command's whole process group.
+func (s *server) execute(ctx context.Context, j *job) result {
+	if s.cfg.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.cfg.timeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, s.cfg.argv[0], s.cfg.argv[1:]...)
+	setProcessGroup(cmd)
+	cmd.WaitDelay = waitDelay
 	cmd.Env = j.env
 	cmd.Stdin = bytes.NewReader(j.body)
 
@@ -53,28 +70,47 @@ func (s *server) execute(j *job) result {
 
 	start := time.Now()
 	err := cmd.Run()
-	res := result{duration: time.Since(start)}
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			res.exitCode = ee.ExitCode()
-		} else {
-			// The command could not be started at all.
-			res.exitCode = 127
-			if cmd.Stdout != nil {
-				fmt.Fprintf(cmd.Stdout, "hook: %v\n", err)
-			} else {
-				s.log.Printf("#%d: %v", j.id, err)
-			}
-		}
-	}
+	res := result{duration: time.Since(start), exitCode: exitCode(cmd.ProcessState)}
 	if fwd != nil {
 		fwd.Flush()
 	}
+
+	// Problems are logged, and with --sync also appended to the output so
+	// the caller sees them.
+	note := func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		s.log.Printf("#%d: %s", j.id, msg)
+		if capture != nil {
+			fmt.Fprintf(capture, "hook: %s\n", msg)
+		}
+	}
+	switch {
+	case cmd.ProcessState == nil:
+		note("%v", err)
+	case err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded):
+		res.exitCode = exitTimeout
+		note("timed out after %s, killed", s.cfg.timeout)
+	case errors.Is(err, exec.ErrWaitDelay):
+		note("command exited but left its output open; a background process should redirect its output")
+	}
+
 	if capture != nil {
 		res.output, res.truncated = capture.buf.Bytes(), capture.truncated
 	}
 	return res
+}
+
+// exitCode reports how the command ended as a shell-style exit code: its
+// exit status, 128+n if it was killed by signal n, or 127 if it never
+// started.
+func exitCode(ps *os.ProcessState) int {
+	if ps == nil {
+		return 127
+	}
+	if code := ps.ExitCode(); code >= 0 {
+		return code
+	}
+	return signalExitCode(ps)
 }
 
 // capBuffer keeps the first max bytes written to it and drops the rest.

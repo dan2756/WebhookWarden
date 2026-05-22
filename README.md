@@ -68,8 +68,7 @@ rather than queued; with `--max-queue 2`, at most one waits behind it.
 
 With `--sync`, hook waits for the command and answers with its combined
 stdout and stderr: `200` if it exited 0, `500` otherwise. The exit code is in
-the `X-Hook-Exit-Code` header either way (`127` if the command could not be
-started). Every response also carries the run number in `X-Hook-Run`.
+the `X-Hook-Exit-Code` header either way (see [exit codes](#exit-codes)). Every response also carries the run number in `X-Hook-Run`.
 
 ```console
 $ hook --sync 'git -C /srv/site pull --ff-only'
@@ -80,6 +79,33 @@ X-Hook-Run: 1
 
 Already up to date.
 ```
+
+## Timeouts and limits
+
+`--timeout 5m` kills a run that takes longer than that. The command runs in
+its own process group and the whole group is killed (`SIGKILL`), so
+`sh -c 'make deploy'` doesn't leave `make` and its children behind. A run
+killed this way reports exit code `124`.
+
+`--max-body` (default `10MB`) rejects larger request bodies with `413` before
+anything runs. Sizes take an optional `B`, `KB`, `MB` or `GB` suffix (binary
+units); `0` turns the limit off.
+
+If the command starts a background process that keeps its stdout or stderr
+open, hook stops reading 2 seconds after the command itself exits, so the
+queue isn't held up. Redirect the output of anything you start in the
+background (`nohup ./server >server.log 2>&1 &`).
+
+## Exit codes
+
+`X-Hook-Exit-Code`, `last_exit_code` and the access log report the command's
+exit status, plus:
+
+| Code      | Meaning                                    |
+|-----------|--------------------------------------------|
+| `124`     | killed by `--timeout`                      |
+| `127`     | the command could not be started           |
+| `128+n`   | killed by signal `n` (e.g. `137` for `SIGKILL`) |
 
 ## Logging
 
@@ -127,6 +153,8 @@ curl -X POST -H "X-Hub-Signature-256: sha256=$sig" -d "$body" localhost:9000/
 | `--sync`        |             | wait and respond with the command's output |
 | `--concurrent`  |             | let runs overlap instead of queueing     |
 | `--max-queue`   | `100`       | `503` once this many runs are pending (0 = no limit) |
+| `--timeout`     | none        | kill a run after this long, e.g. `30s`, `5m` |
+| `--max-body`    | `10MB`      | `413` for larger bodies (0 = no limit)   |
 | `-q`, `--quiet` |             | don't forward the command's output       |
 | `--version`     |             | print version and exit                   |
 

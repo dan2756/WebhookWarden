@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -293,7 +294,7 @@ func TestOutputForwarding(t *testing.T) {
 func TestQueueFullReturns503(t *testing.T) {
 	s, _ := newTestServer(t, config{maxQueue: 1})
 	release := make(chan struct{})
-	s.exec = func(*job) result {
+	s.exec = func(context.Context, *job) result {
 		<-release
 		return result{}
 	}
@@ -318,7 +319,7 @@ func TestQueueFullReturns503(t *testing.T) {
 func TestSyncWaitsForItsTurn(t *testing.T) {
 	s, _ := newTestServer(t, config{sync: true})
 	release := make(chan struct{})
-	s.exec = func(j *job) result {
+	s.exec = func(_ context.Context, j *job) result {
 		if j.id == 1 {
 			<-release
 		}
@@ -338,5 +339,29 @@ func TestSyncWaitsForItsTurn(t *testing.T) {
 	}
 	if w := <-second; w.Body.String() != "run 2\n" {
 		t.Errorf("second response %q", w.Body.String())
+	}
+}
+
+func TestMaxBody(t *testing.T) {
+	s, _ := newTestServer(t, config{maxBody: 16})
+
+	if w := do(s, "POST", "/", strings.Repeat("x", 16), nil); w.Code != 202 {
+		t.Errorf("16 byte body: status %d, want 202", w.Code)
+	}
+	if w := do(s, "POST", "/", strings.Repeat("x", 17), nil); w.Code != 413 {
+		t.Errorf("17 byte body: status %d, want 413", w.Code)
+	}
+
+	// Without a Content-Length the limit is enforced while reading.
+	r := httptest.NewRequest("POST", "/", strings.NewReader(strings.Repeat("x", 100)))
+	r.ContentLength = -1
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != 413 {
+		t.Errorf("chunked 100 byte body: status %d, want 413", w.Code)
+	}
+	s.wait()
+	if st := s.status(); st.Runs != 1 {
+		t.Errorf("runs = %d, want 1", st.Runs)
 	}
 }

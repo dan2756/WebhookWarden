@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,7 +17,7 @@ type server struct {
 	cfg   *config
 	log   *logger
 	queue *queue
-	exec  func(*job) result // runs the command; replaced in tests
+	exec  func(context.Context, *job) result // runs the command; replaced in tests
 
 	mu       sync.Mutex // guards the fields below
 	runs     int
@@ -73,9 +75,21 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.cfg.maxBody > 0 {
+		if r.ContentLength > s.cfg.maxBody {
+			s.reply(w, r, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, s.cfg.maxBody)
+	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		s.reply(w, r, http.StatusBadRequest, "reading body: "+err.Error())
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.reply(w, r, http.StatusRequestEntityTooLarge, "request body too large")
+		} else {
+			s.reply(w, r, http.StatusBadRequest, "reading body: "+err.Error())
+		}
 		return
 	}
 	if s.cfg.secret != "" && !verifySignature([]byte(s.cfg.secret), r.Header, body) {
@@ -122,7 +136,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // runJob is called by the queue when it is j's turn.
 func (s *server) runJob(j *job) {
-	res := s.exec(j)
+	res := s.exec(context.Background(), j)
 	s.record(res)
 	if j.done != nil {
 		j.done <- res // the handler logs and responds
