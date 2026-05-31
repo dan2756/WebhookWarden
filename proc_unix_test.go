@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -49,5 +50,24 @@ func TestSignalExitCode(t *testing.T) {
 	w := do(s, "POST", "/", "", nil)
 	if got := w.Header().Get("X-Hook-Exit-Code"); got != "143" {
 		t.Errorf("X-Hook-Exit-Code = %q, want 143 (128+SIGTERM)", got)
+	}
+}
+
+func TestShutdownKillsAfterTimeout(t *testing.T) {
+	s, logs := newTestServer(t, config{argv: []string{"sh", "-c", "echo started; sleep 30"}})
+	do(s, "POST", "/", "", nil)
+	waitUntil(t, "command to start", func() bool { return strings.Contains(logs.String(), "[#1] started") })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := s.shutdown(ctx, nil); err == nil {
+		t.Error("shutdown returned nil, want an error about killed commands")
+	}
+	if elapsed := time.Since(start); elapsed >= waitDelay {
+		t.Errorf("shutdown took %s", elapsed)
+	}
+	if !strings.Contains(logs.String(), "POST / 202 #1") || !strings.Contains(logs.String(), "exit=137") {
+		t.Errorf("want the run logged with exit=137 (SIGKILL):\n%s", logs.String())
 	}
 }

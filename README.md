@@ -96,6 +96,18 @@ open, hook stops reading 2 seconds after the command itself exits, so the
 queue isn't held up. Redirect the output of anything you start in the
 background (`nohup ./server >server.log 2>&1 &`).
 
+## Shutting down
+
+On `SIGINT` or `SIGTERM`, hook stops accepting requests, drops runs that are
+still waiting in the queue (with `--sync`, their requests get `503`) and waits
+for the running command to finish, up to `--shutdown-timeout` (default
+`30s`). After that, or on a second signal, the command's process group is
+killed. hook exits `0` after a clean shutdown and `1` if it had to kill
+anything.
+
+Because runs have their own process group, Ctrl-C in the terminal reaches
+only hook, not the command, so a deploy in progress isn't cut off halfway.
+
 ## Exit codes
 
 `X-Hook-Exit-Code`, `last_exit_code` and the access log report the command's
@@ -155,6 +167,7 @@ curl -X POST -H "X-Hub-Signature-256: sha256=$sig" -d "$body" localhost:9000/
 | `--max-queue`   | `100`       | `503` once this many runs are pending (0 = no limit) |
 | `--timeout`     | none        | kill a run after this long, e.g. `30s`, `5m` |
 | `--max-body`    | `10MB`      | `413` for larger bodies (0 = no limit)   |
+| `--shutdown-timeout` | `30s`  | how long to wait for a running command on exit |
 | `-q`, `--quiet` |             | don't forward the command's output       |
 | `--version`     |             | print version and exit                   |
 

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,9 +11,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -42,6 +45,9 @@ Flags:
                         (default 0, no limit)
       --max-body SIZE   answer 413 to bodies larger than SIZE (default 10MB,
                         0 = no limit)
+      --shutdown-timeout D
+                        on SIGINT/SIGTERM, wait this long for a running command
+                        before killing it (default 30s)
   -q, --quiet           don't forward the command's output to stderr
   -h, --help            show this help
       --version         print the version and exit
@@ -61,6 +67,7 @@ type config struct {
 	maxQueue    int
 	timeout     time.Duration
 	maxBody     int64
+	shutdown    time.Duration
 	quiet       bool
 	argv        []string
 	showVersion bool
@@ -96,8 +103,40 @@ func run(args []string, stdout, stderr io.Writer) int {
 		log.Printf("warning: listening on %s without --secret, anyone who can reach it can run the command", cfg.bind)
 	}
 
+	// Runs live in their own process groups, so a Ctrl-C in the terminal
+	// reaches only hook. It stops taking requests, lets the running command
+	// finish (up to --shutdown-timeout) and exits; a second signal kills the
+	// command right away.
+	sigc := make(chan os.Signal, 2)
+	signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigc)
+
 	hs := &http.Server{Handler: srv, ReadHeaderTimeout: 10 * time.Second}
-	if err := hs.Serve(ln); err != nil {
+	errc := make(chan error, 1)
+	go func() { errc <- hs.Serve(ln) }()
+
+	select {
+	case err := <-errc:
+		log.Printf("%v", err)
+		return 1
+	case sig := <-sigc:
+		log.Printf("received %s, shutting down", sig)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.shutdown)
+	defer cancel()
+	go func() {
+		select {
+		case <-sigc:
+			log.Printf("received second signal, killing running commands")
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	if running, _ := srv.queue.stats(); running > 0 {
+		log.Printf("waiting up to %s for %d running command(s)", cfg.shutdown, running)
+	}
+	if err := srv.shutdown(ctx, hs); err != nil {
 		log.Printf("%v", err)
 		return 1
 	}
@@ -119,6 +158,7 @@ func parseArgs(args []string, getenv func(string) string) (*config, error) {
 	fs.DurationVar(&cfg.timeout, "timeout", 0, "")
 	maxBody := byteSize(10 << 20)
 	fs.Var(&maxBody, "max-body", "")
+	fs.DurationVar(&cfg.shutdown, "shutdown-timeout", 30*time.Second, "")
 	fs.BoolVar(&cfg.quiet, "q", false, "")
 	fs.BoolVar(&cfg.quiet, "quiet", false, "")
 	fs.BoolVar(&cfg.showVersion, "version", false, "")
@@ -137,6 +177,9 @@ func parseArgs(args []string, getenv func(string) string) (*config, error) {
 	}
 	if cfg.timeout < 0 {
 		return nil, fmt.Errorf("invalid --timeout %s", cfg.timeout)
+	}
+	if cfg.shutdown < 0 {
+		return nil, fmt.Errorf("invalid --shutdown-timeout %s", cfg.shutdown)
 	}
 	if cfg.path != "" && !strings.HasPrefix(cfg.path, "/") {
 		return nil, fmt.Errorf("--path must start with /, got %q", cfg.path)

@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"sync"
 )
 
-var errQueueFull = errors.New("queue full")
+var (
+	errQueueFull = errors.New("queue full")
+	errClosed    = errors.New("shutting down")
+)
 
 // queue runs jobs in the order they were submitted, at most maxRunning at
 // a time (0 means no limit), and refuses new jobs once maxPending are
@@ -19,6 +23,7 @@ type queue struct {
 	seq     int64
 	running int
 	waiting []*job
+	closed  bool
 	wg      sync.WaitGroup
 }
 
@@ -26,10 +31,13 @@ func newQueue(maxRunning, maxPending int, run func(*job)) *queue {
 	return &queue{run: run, maxRunning: maxRunning, maxPending: maxPending}
 }
 
-// submit numbers j and schedules it, or returns errQueueFull.
+// submit numbers j and schedules it, or returns errQueueFull or errClosed.
 func (q *queue) submit(j *job) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.closed {
+		return errClosed
+	}
 	if q.maxPending > 0 && q.running+len(q.waiting) >= q.maxPending {
 		return errQueueFull
 	}
@@ -72,5 +80,28 @@ func (q *queue) stats() (running, waiting int) {
 	return q.running, len(q.waiting)
 }
 
-// wait blocks until every submitted job has finished.
-func (q *queue) wait() { q.wg.Wait() }
+// close makes every later submit fail and returns the jobs that were still
+// waiting. They are removed from the queue and will not run.
+func (q *queue) close() []*job {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.closed = true
+	dropped := q.waiting
+	q.waiting = nil
+	return dropped
+}
+
+// wait blocks until every submitted job has finished, or ctx is done.
+func (q *queue) wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		q.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}

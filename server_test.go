@@ -365,3 +365,78 @@ func TestMaxBody(t *testing.T) {
 		t.Errorf("runs = %d, want 1", st.Runs)
 	}
 }
+
+func TestShutdownFinishesRunningRun(t *testing.T) {
+	s, logs := newTestServer(t, config{})
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var ran []int64
+	s.exec = func(_ context.Context, j *job) result {
+		if j.id == 1 {
+			<-release
+		}
+		mu.Lock()
+		ran = append(ran, j.id)
+		mu.Unlock()
+		return result{}
+	}
+	for range 3 {
+		do(s, "POST", "/", "", nil)
+	}
+	waitUntil(t, "runs to queue", func() bool { return s.status().Queued == 2 })
+
+	done := make(chan error)
+	go func() { done <- s.shutdown(context.Background(), nil) }()
+	waitUntil(t, "queue to close", func() bool { return s.status().Queued == 0 })
+
+	if w := do(s, "POST", "/", "", nil); w.Code != 503 {
+		t.Errorf("POST during shutdown: status %d, want 503", w.Code)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("shutdown returned (%v) while a run was in progress", err)
+	default:
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Errorf("shutdown: %v", err)
+	}
+	if len(ran) != 1 || ran[0] != 1 {
+		t.Errorf("ran %v, want only #1", ran)
+	}
+	for _, want := range []string{"202 #2 dropped", "202 #3 dropped", "POST / 202 #1"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log is missing %q:\n%s", want, logs.String())
+		}
+	}
+}
+
+func TestShutdownAnswersQueuedSyncRequests(t *testing.T) {
+	s, _ := newTestServer(t, config{sync: true})
+	release := make(chan struct{})
+	s.exec = func(context.Context, *job) result {
+		<-release
+		return result{output: []byte("done\n")}
+	}
+
+	first := make(chan *httptest.ResponseRecorder)
+	go func() { first <- do(s, "POST", "/", "", nil) }()
+	waitUntil(t, "first run to start", func() bool { return s.status().Running == 1 })
+	second := make(chan *httptest.ResponseRecorder)
+	go func() { second <- do(s, "POST", "/", "", nil) }()
+	waitUntil(t, "second run to queue", func() bool { return s.status().Queued == 1 })
+
+	done := make(chan error)
+	go func() { done <- s.shutdown(context.Background(), nil) }()
+	if w := <-second; w.Code != 503 {
+		t.Errorf("queued sync request: status %d, want 503", w.Code)
+	}
+	close(release)
+	if w := <-first; w.Code != 200 || w.Body.String() != "done\n" {
+		t.Errorf("running sync request: status %d body %q", w.Code, w.Body.String())
+	}
+	if err := <-done; err != nil {
+		t.Errorf("shutdown: %v", err)
+	}
+}

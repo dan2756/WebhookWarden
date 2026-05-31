@@ -19,6 +19,9 @@ type server struct {
 	queue *queue
 	exec  func(context.Context, *job) result // runs the command; replaced in tests
 
+	runCtx context.Context    // parent of every run's context
+	kill   context.CancelFunc // cancels runCtx, killing running commands
+
 	mu       sync.Mutex // guards the fields below
 	runs     int
 	lastExit int
@@ -33,12 +36,13 @@ type job struct {
 	path   string
 	body   []byte
 	env    []string
-	done   chan result // set for --sync requests, which wait for the result
+	done   chan result // set for --sync requests; closed if the job is dropped
 }
 
 func newServer(cfg *config, log *logger) *server {
 	s := &server{cfg: cfg, log: log}
 	s.exec = s.execute
+	s.runCtx, s.kill = context.WithCancel(context.Background())
 	workers := 1
 	if cfg.concurrent {
 		workers = 0
@@ -120,7 +124,11 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := <-j.done
+	res, ok := <-j.done
+	if !ok {
+		s.reply(w, r, http.StatusServiceUnavailable, "shutting down")
+		return
+	}
 	code := http.StatusOK
 	if res.exitCode != 0 {
 		code = http.StatusInternalServerError
@@ -136,7 +144,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // runJob is called by the queue when it is j's turn.
 func (s *server) runJob(j *job) {
-	res := s.exec(context.Background(), j)
+	res := s.exec(s.runCtx, j)
 	s.record(res)
 	if j.done != nil {
 		j.done <- res // the handler logs and responds
@@ -146,7 +154,40 @@ func (s *server) runJob(j *job) {
 }
 
 // wait blocks until all queued runs have finished.
-func (s *server) wait() { s.queue.wait() }
+func (s *server) wait() { s.queue.wait(context.Background()) }
+
+// shutdown stops taking new runs, drops the ones that haven't started and
+// waits for the running ones (and the --sync requests waiting on them) to
+// finish. If ctx is done first, the running commands are killed. hs may be
+// nil.
+func (s *server) shutdown(ctx context.Context, hs *http.Server) error {
+	for _, j := range s.queue.close() {
+		if j.done != nil {
+			close(j.done) // its handler answers 503
+		} else {
+			s.log.Printf("%s %s %s %d #%d dropped, shutting down", j.remote, j.method, j.path,
+				http.StatusAccepted, j.id)
+		}
+	}
+	if hs != nil {
+		// Stops listening, then waits for in-flight requests.
+		hs.Shutdown(ctx)
+	}
+	if err := s.queue.wait(ctx); err == nil {
+		return nil
+	}
+
+	s.kill()
+	// Killed commands exit at once; give them a moment to be reaped and
+	// their requests a chance to be answered.
+	wctx, cancel := context.WithTimeout(context.Background(), waitDelay+time.Second)
+	defer cancel()
+	s.queue.wait(wctx)
+	if hs != nil {
+		hs.Close()
+	}
+	return errors.New("running commands did not finish in time and were killed")
+}
 
 func (s *server) record(res result) {
 	s.mu.Lock()

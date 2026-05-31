@@ -90,6 +90,8 @@ func (s *server) execute(ctx context.Context, j *job) result {
 	case err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		res.exitCode = exitTimeout
 		note("timed out after %s, killed", s.cfg.timeout)
+	case err != nil && ctx.Err() != nil:
+		note("killed, hook is shutting down")
 	case errors.Is(err, exec.ErrWaitDelay):
 		note("command exited but left its output open; a background process should redirect its output")
 	}

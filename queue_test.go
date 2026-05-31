@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"testing"
@@ -50,7 +51,7 @@ func TestQueueRunsOneAtATimeInOrder(t *testing.T) {
 		t.Errorf("stats = %d running, %d waiting; want 1, 4", running, waiting)
 	}
 	close(gate)
-	q.wait()
+	q.wait(context.Background())
 
 	if want := []int64{1, 2, 3, 4, 5}; !slices.Equal(order, want) {
 		t.Errorf("ran in order %v, want %v", order, want)
@@ -82,7 +83,7 @@ func TestQueueConcurrent(t *testing.T) {
 		t.Errorf("stats = %d running, %d waiting; want 3, 0", running, waiting)
 	}
 	close(release)
-	q.wait()
+	q.wait(context.Background())
 }
 
 func TestQueueFull(t *testing.T) {
@@ -101,15 +102,56 @@ func TestQueueFull(t *testing.T) {
 			t.Errorf("maxRunning=%d: third submit = %v, want errQueueFull", maxRunning, err)
 		}
 		close(release)
-		q.wait()
+		q.wait(context.Background())
 
 		if err := q.submit(c); err != nil {
 			t.Errorf("maxRunning=%d: submit after drain: %v", maxRunning, err)
 		}
-		q.wait()
+		q.wait(context.Background())
 		if a.id != 1 || b.id != 2 || c.id != 3 {
 			t.Errorf("maxRunning=%d: ids %d %d %d, want 1 2 3 (rejected jobs don't use up a number)",
 				maxRunning, a.id, b.id, c.id)
 		}
+	}
+}
+
+func TestQueueClose(t *testing.T) {
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var ran []int64
+	q := newQueue(1, 0, func(j *job) {
+		if j.id == 1 {
+			<-release
+		}
+		mu.Lock()
+		ran = append(ran, j.id)
+		mu.Unlock()
+	})
+	for range 3 {
+		if err := q.submit(&job{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dropped := q.close()
+	if len(dropped) != 2 || dropped[0].id != 2 || dropped[1].id != 3 {
+		t.Errorf("close dropped %d jobs, want #2 and #3", len(dropped))
+	}
+	if err := q.submit(&job{}); err != errClosed {
+		t.Errorf("submit after close = %v, want errClosed", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := q.wait(ctx); err != context.DeadlineExceeded {
+		t.Errorf("wait with a run in progress = %v, want DeadlineExceeded", err)
+	}
+
+	close(release)
+	if err := q.wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ran, []int64{1}) {
+		t.Errorf("ran %v, want only the run that had already started", ran)
 	}
 }
