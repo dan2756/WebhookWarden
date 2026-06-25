@@ -55,6 +55,10 @@ Flags:
 Environment passed to the command:
   HOOK_METHOD, HOOK_PATH, HOOK_QUERY, HOOK_REMOTE_ADDR, HOOK_CONTENT_TYPE
   HOOK_HEADER_<NAME>    one per request header, e.g. HOOK_HEADER_X_GITHUB_EVENT
+
+Examples:
+  HOOK_SECRET=s3cret hook --path /deploy --timeout 10m -- ./deploy.sh
+  hook --sync -p 8080 'git pull --ff-only && make'
 `
 
 type config struct {

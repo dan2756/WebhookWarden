@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,6 +44,16 @@ func (s *server) execute(ctx context.Context, j *job) result {
 	}
 	cmd := exec.CommandContext(ctx, s.cfg.argv[0], s.cfg.argv[1:]...)
 	setProcessGroup(cmd)
+	// Remember whether cancelling actually killed anything: the deadline
+	// can also pass while hook is still reading the output of a command
+	// that has already exited, and then the command's own exit code stands.
+	var killed atomic.Bool
+	kill := cmd.Cancel
+	cmd.Cancel = func() error {
+		err := kill()
+		killed.Store(err == nil)
+		return err
+	}
 	cmd.WaitDelay = waitDelay
 	cmd.Env = j.env
 	cmd.Stdin = bytes.NewReader(j.body)
@@ -87,10 +98,10 @@ func (s *server) execute(ctx context.Context, j *job) result {
 	switch {
 	case cmd.ProcessState == nil:
 		note("%v", err)
-	case err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded):
+	case killed.Load() && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		res.exitCode = exitTimeout
 		note("timed out after %s, killed", s.cfg.timeout)
-	case err != nil && ctx.Err() != nil:
+	case killed.Load():
 		note("killed, hook is shutting down")
 	case errors.Is(err, exec.ErrWaitDelay):
 		note("command exited but left its output open; a background process should redirect its output")

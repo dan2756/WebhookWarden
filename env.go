@@ -1,7 +1,9 @@
 package main
 
 import (
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -23,8 +25,19 @@ func buildEnv(base []string, r *http.Request) []string {
 		"HOOK_REMOTE_ADDR="+r.RemoteAddr,
 		"HOOK_CONTENT_TYPE="+r.Header.Get("Content-Type"),
 	)
-	for name, values := range r.Header {
-		env = append(env, "HOOK_HEADER_"+envName(name)+"="+values[0])
+	// Repeated headers, and spellings that map to the same variable
+	// (X-Foo and X_Foo), are joined with ", " the way HTTP combines them.
+	// Go keeps Host out of r.Header, so it is added back here.
+	headers := map[string][]string{}
+	if r.Host != "" {
+		headers["HOOK_HEADER_HOST"] = []string{r.Host}
+	}
+	for _, name := range slices.Sorted(maps.Keys(r.Header)) {
+		key := "HOOK_HEADER_" + envName(name)
+		headers[key] = append(headers[key], r.Header[name]...)
+	}
+	for _, key := range slices.Sorted(maps.Keys(headers)) {
+		env = append(env, key+"="+strings.Join(headers[key], ", "))
 	}
 	return env
 }

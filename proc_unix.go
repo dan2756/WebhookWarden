@@ -13,8 +13,13 @@ import (
 // makes cancellation (a timeout, or a forced shutdown) kill that whole
 // group, not just the direct child: `sh -c 'make deploy'` leaves make and
 // everything it started running if only sh is killed.
+//
+// The group gets a new session, too, so the command has no controlling
+// terminal. In a background group of hook's own session, a prompt that
+// reads /dev/tty (git, sudo, ssh) would be stopped by SIGTTIN and hang the
+// queue; without a terminal it fails instead.
 func setProcessGroup(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Cancel = func() error {
 		// A negative pid signals every process in the group.
 		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)

@@ -179,11 +179,14 @@ func (s *server) shutdown(ctx context.Context, hs *http.Server) error {
 
 	s.kill()
 	// Killed commands exit at once; give them a moment to be reaped and
-	// their requests a chance to be answered.
+	// their requests a chance to be answered. The handlers are still
+	// writing those answers when the queue is done, so wait for them too
+	// before closing whatever connections are left.
 	wctx, cancel := context.WithTimeout(context.Background(), waitDelay+time.Second)
 	defer cancel()
 	s.queue.wait(wctx)
 	if hs != nil {
+		hs.Shutdown(wctx)
 		hs.Close()
 	}
 	return errors.New("running commands did not finish in time and were killed")

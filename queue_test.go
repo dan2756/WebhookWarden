@@ -155,3 +155,19 @@ func TestQueueClose(t *testing.T) {
 		t.Errorf("ran %v, want only the run that had already started", ran)
 	}
 }
+
+func TestQueueWaitIdleWithDoneContext(t *testing.T) {
+	q := newQueue(1, 0, func(*job) {})
+	if err := q.submit(&job{}); err != nil {
+		t.Fatal(err)
+	}
+	q.wait(context.Background())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 100 {
+		if err := q.wait(ctx); err != nil {
+			t.Fatalf("wait on an idle queue = %v, want nil", err)
+		}
+	}
+}

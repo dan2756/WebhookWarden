@@ -102,6 +102,11 @@ func (q *queue) wait(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
+		// With ctx already done, this case can win before the goroutine
+		// above has closed done, even though nothing is running.
+		if running, _ := q.stats(); running == 0 {
+			return nil
+		}
 		return ctx.Err()
 	}
 }
