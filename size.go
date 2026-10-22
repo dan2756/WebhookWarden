@@ -42,6 +42,12 @@ func parseSize(s string) (int64, error) {
 	if n >= math.MaxInt64 {
 		return 0, fmt.Errorf("size %q is too large", s)
 	}
+	// A positive size that rounds down to 0 would disable the limit, the
+	// same as an explicit 0. Reject it so --max-body 0.5 can't quietly
+	// turn the limit off.
+	if f > 0 && n < 1 {
+		return 0, fmt.Errorf("invalid size %q (smaller than 1 byte; use 0 for no limit)", s)
+	}
 	return int64(n), nil
 }
 

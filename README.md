@@ -156,7 +156,8 @@ killed this way reports exit code `124`.
 
 `--max-body` (default `10MB`) rejects larger request bodies with `413` before
 anything runs. Sizes take an optional `B`, `KB`, `MB` or `GB` suffix (binary
-units); `0` turns the limit off.
+units); `0` turns the limit off. A value greater than 0 that rounds down to
+nothing, such as `0.5`, is rejected so it can't quietly turn the limit off.
 
 If the command starts a background process that keeps its stdout or stderr
 open, hook stops reading 2 seconds after the command itself exits, so the
