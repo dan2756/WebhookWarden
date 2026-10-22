@@ -50,6 +50,24 @@ func TestParseArgsFlags(t *testing.T) {
 	}
 }
 
+func TestParseArgsMaxBody(t *testing.T) {
+	cfg, err := parseArgs([]string{"--max-body", "0", "true"}, noenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.maxBody != 0 {
+		t.Errorf("maxBody = %d, want 0 (no limit)", cfg.maxBody)
+	}
+
+	cfg, err = parseArgs([]string{"--max-body", "1.5MB", "true"}, noenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.maxBody != 3<<19 {
+		t.Errorf("maxBody = %d, want %d", cfg.maxBody, 3<<19)
+	}
+}
+
 func TestParseArgsSecret(t *testing.T) {
 	env := func(k string) string {
 		if k == "HOOK_SECRET" {
@@ -82,6 +100,8 @@ func TestParseArgsErrors(t *testing.T) {
 		{"--nope", "true"},
 		{"--path", "deploy", "true"},
 		{"--max-queue", "-1", "true"},
+		{"--max-body", "0.5", "true"},
+		{"--max-body", "0.9B", "true"},
 	} {
 		if _, err := parseArgs(args, noenv); err == nil {
 			t.Errorf("parseArgs(%q) succeeded, want error", args)
