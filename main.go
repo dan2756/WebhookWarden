@@ -34,7 +34,8 @@ Flags:
   -p, --port N          port to listen on (default 9000)
       --bind ADDR       address to bind (default 127.0.0.1; 0.0.0.0 exposes
                         hook to the whole network)
-      --path PATH       only serve PATH; any other path is 404
+      --path PATH       only serve PATH, a URL path with no query or fragment;
+                        any other path is 404
       --secret S        require a valid HMAC-SHA256 signature (or set HOOK_SECRET)
       --sync            wait for the command and respond with its output
                         (200 on success, 500 on a non-zero exit)
@@ -190,6 +191,11 @@ func parseArgs(args []string, getenv func(string) string) (*config, error) {
 	}
 	if pathHasCTL(cfg.path) {
 		return nil, fmt.Errorf("--path contains a control character: %q", cfg.path)
+	}
+	// Compared against URL.Path, which never includes a query or fragment,
+	// so a flag that has one can never match a request.
+	if strings.ContainsAny(cfg.path, "?#") {
+		return nil, fmt.Errorf("--path must be a URL path without a query or fragment, got %q", cfg.path)
 	}
 
 	rest := fs.Args()
