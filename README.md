@@ -83,9 +83,11 @@ also how the run shows up in the log.
 ### Paths and status
 
 By default any path is accepted. `--path /deploy` restricts hook to that one
-path; everything else gets `404`. `GET /` (or `GET /deploy` with `--path`)
-returns the status document shown above. `last_exit_code` and `last_run`
-(when the last run finished) are `null` until a run has finished.
+path; everything else gets `404`. The flag is compared to the URL path, so it
+must start with `/` and cannot include a query string (`?`) or fragment (`#`):
+those are not part of the path and would never match. `GET /` (or `GET /deploy`
+with `--path`) returns the status document shown above. `last_exit_code` and
+`last_run` (when the last run finished) are `null` until a run has finished.
 
 ### Sync mode
 
@@ -219,7 +221,7 @@ exit status, or:
 |----------------------|----------------|----------------------------------------------------|
 | `-p`, `--port`       | `9000`         | port to listen on                                  |
 | `--bind`             | `127.0.0.1`    | address to listen on; `0.0.0.0` exposes hook        |
-| `--path`             |                | only accept this path, `404` for others            |
+| `--path`             |                | only accept this URL path, `404` for others        |
 | `--secret`           | `$HOOK_SECRET` | require a valid HMAC-SHA256 signature              |
 | `--sync`             |                | wait and respond with the command's output         |
 | `--concurrent`       |                | let runs overlap instead of queueing               |

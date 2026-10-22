@@ -48,6 +48,14 @@ func TestParseArgsFlags(t *testing.T) {
 	if cfg.port != 9000 || cfg.bind != "127.0.0.1" {
 		t.Errorf("defaults: got port %d bind %q", cfg.port, cfg.bind)
 	}
+
+	cfg, err = parseArgs([]string{"--path", "/deploy", "true"}, noenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.path != "/deploy" {
+		t.Errorf("path = %q, want /deploy", cfg.path)
+	}
 }
 
 func TestParseArgsMaxBody(t *testing.T) {
@@ -104,6 +112,8 @@ func TestParseArgsErrors(t *testing.T) {
 		{"--max-body", "0.9B", "true"},
 		{"--path", "/deploy\n", "true"},
 		{"--path", "/deploy\x00", "true"},
+		{"--path", "/deploy?x=1", "true"},
+		{"--path", "/deploy#frag", "true"},
 	} {
 		if _, err := parseArgs(args, noenv); err == nil {
 			t.Errorf("parseArgs(%q) succeeded, want error", args)
