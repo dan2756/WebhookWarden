@@ -102,6 +102,8 @@ func TestParseArgsErrors(t *testing.T) {
 		{"--max-queue", "-1", "true"},
 		{"--max-body", "0.5", "true"},
 		{"--max-body", "0.9B", "true"},
+		{"--path", "/deploy\n", "true"},
+		{"--path", "/deploy\x00", "true"},
 	} {
 		if _, err := parseArgs(args, noenv); err == nil {
 			t.Errorf("parseArgs(%q) succeeded, want error", args)

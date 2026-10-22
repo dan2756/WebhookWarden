@@ -59,7 +59,24 @@ func (s *server) statusPath() string {
 	return "/"
 }
 
+// pathHasCTL reports whether p contains an ASCII control character.
+// A decoded request path can: %0a is a newline and %00 is a NUL. A newline
+// splits the access log, and a NUL makes exec refuse the whole environment
+// so the command never starts.
+func pathHasCTL(p string) bool {
+	for i := 0; i < len(p); i++ {
+		if p[i] < 0x20 || p[i] == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if pathHasCTL(r.URL.Path) {
+		s.reply(w, r, http.StatusBadRequest, "invalid path")
+		return
+	}
 	if s.cfg.path != "" && r.URL.Path != s.cfg.path {
 		s.reply(w, r, http.StatusNotFound, "not found")
 		return

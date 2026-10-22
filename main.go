@@ -188,6 +188,9 @@ func parseArgs(args []string, getenv func(string) string) (*config, error) {
 	if cfg.path != "" && !strings.HasPrefix(cfg.path, "/") {
 		return nil, fmt.Errorf("--path must start with /, got %q", cfg.path)
 	}
+	if pathHasCTL(cfg.path) {
+		return nil, fmt.Errorf("--path contains a control character: %q", cfg.path)
+	}
 
 	rest := fs.Args()
 	if len(rest) == 0 {

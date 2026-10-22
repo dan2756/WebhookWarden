@@ -65,6 +65,40 @@ func do(s http.Handler, method, target, body string, header http.Header) *httpte
 	return w
 }
 
+func TestPathControlCharsRejected(t *testing.T) {
+	s, logs := newTestServer(t, config{path: "/deploy", sync: true, argv: []string{"echo", "ran"}})
+
+	w := do(s, "POST", "/%0d%0aFORGED", "body", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("newline path: status %d, want 400", w.Code)
+	}
+	if w.Body.String() != "invalid path\n" {
+		t.Errorf("body = %q", w.Body.String())
+	}
+	// One access line, with the decoded CR/LF escaped rather than embedded.
+	out := logs.String()
+	if strings.Count(out, "\n") != 1 || !strings.Contains(out, `POST /\r\nFORGED 400`) {
+		t.Errorf("access log = %q, want one line with an escaped path", out)
+	}
+
+	w = do(s, "POST", "/%00", "", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("NUL path: status %d, want 400", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "ran") {
+		t.Errorf("command ran for a rejected path: %q", w.Body.String())
+	}
+	s.wait()
+	if st := s.status(); st.Runs != 0 {
+		t.Errorf("runs = %d, want 0", st.Runs)
+	}
+
+	// A matching path still runs; the check only refuses control characters.
+	if w := do(s, "POST", "/deploy", "", nil); w.Code != 200 || w.Body.String() != "ran\n" {
+		t.Errorf("POST /deploy: status %d body %q", w.Code, w.Body.String())
+	}
+}
+
 func TestMethodsAndPaths(t *testing.T) {
 	tests := []struct {
 		path   string // --path
