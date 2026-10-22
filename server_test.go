@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,6 +98,32 @@ func TestPathControlCharsRejected(t *testing.T) {
 	// A matching path still runs; the check only refuses control characters.
 	if w := do(s, "POST", "/deploy", "", nil); w.Code != 200 || w.Body.String() != "ran\n" {
 		t.Errorf("POST /deploy: status %d body %q", w.Code, w.Body.String())
+	}
+}
+
+type errReader struct{ err error }
+
+func (r errReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestBodyReadError(t *testing.T) {
+	s, logs := newTestServer(t, config{sync: true, argv: []string{"echo", "ran"}})
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	r.Body = io.NopCloser(errReader{err: errors.New("connection reset")})
+	r.ContentLength = -1
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", w.Code)
+	}
+	if got := w.Body.String(); got != "reading body: connection reset\n" {
+		t.Errorf("body = %q", got)
+	}
+	s.wait()
+	if st := s.status(); st.Runs != 0 {
+		t.Errorf("runs = %d, want 0", st.Runs)
+	}
+	if strings.Contains(logs.String(), "ran") {
+		t.Errorf("command output leaked into the log:\n%s", logs.String())
 	}
 }
 

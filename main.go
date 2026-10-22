@@ -27,8 +27,8 @@ Usage:
 
 Each POST runs the command once, with the request body on stdin and the
 request details in HOOK_* environment variables. Runs are queued and
-executed one at a time, in order. GET / (or GET on --path) returns a small
-JSON status document; other methods get 405.
+executed one at a time, in order. GET or HEAD of / (or of --path) returns a
+small JSON status document; other methods get 405.
 
 Flags:
   -p, --port N          port to listen on (default 9000)

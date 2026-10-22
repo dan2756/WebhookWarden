@@ -66,16 +66,17 @@ already in `known_hosts`, a `NOPASSWD` sudo rule.
 
 ## Responses
 
-| Status | When                                                              |
-|--------|-------------------------------------------------------------------|
-| `202`  | accepted; the command runs in the background                      |
-| `200`  | `--sync` and the command exited 0; also `GET` on the status path  |
-| `500`  | `--sync` and the command exited non-zero                          |
-| `401`  | `--secret` is set and the signature is missing or wrong           |
-| `404`  | `--path` is set and this is a different path                      |
-| `405`  | not a POST (and not a GET of the status path)                     |
-| `413`  | body larger than `--max-body`                                     |
-| `503`  | the queue is full, or hook is shutting down                       |
+| Status | When                                                                       |
+|--------|----------------------------------------------------------------------------|
+| `202`  | accepted; the command runs in the background                               |
+| `200`  | `--sync` and the command exited 0; also `GET` or `HEAD` on the status path |
+| `500`  | `--sync` and the command exited non-zero                                   |
+| `400`  | the path contains a control character, or the body could not be read       |
+| `401`  | `--secret` is set and the signature is missing or wrong                    |
+| `404`  | `--path` is set and this is a different path                               |
+| `405`  | not a POST, and not a GET or HEAD of the status path                       |
+| `413`  | body larger than `--max-body`                                              |
+| `503`  | the queue is full, or hook is shutting down                                |
 
 Accepted requests get an `X-Hook-Run` header with the run number, which is
 also how the run shows up in the log.
@@ -85,9 +86,11 @@ also how the run shows up in the log.
 By default any path is accepted. `--path /deploy` restricts hook to that one
 path; everything else gets `404`. The flag is compared to the URL path, so it
 must start with `/` and cannot include a query string (`?`) or fragment (`#`):
-those are not part of the path and would never match. `GET /` (or `GET /deploy`
-with `--path`) returns the status document shown above. `last_exit_code` and
-`last_run` (when the last run finished) are `null` until a run has finished.
+those are not part of the path and would never match. A path containing a
+control character, such as a newline from `%0a`, is rejected with `400`.
+`GET` or `HEAD` of `/` (or of `--path`) returns the status document shown
+above. `last_exit_code` and `last_run` (when the last run finished) are
+`null` until a run has finished.
 
 ### Sync mode
 
