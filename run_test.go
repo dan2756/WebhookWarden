@@ -20,6 +20,26 @@ func TestPrefixWriter(t *testing.T) {
 	}
 }
 
+func TestPrefixWriterCarriageReturn(t *testing.T) {
+	var out syncBuffer
+	w := &prefixWriter{log: newLogger(&out), prefix: "[#1] "}
+	// Windows newlines, a progress rewrite, and a payload that tries to
+	// paint over the prefix all have to stay one prefixed line.
+	for _, chunk := range []string{"hello\r\n", "10%\r20%\r", "30%\n", "\rforged access line\n"} {
+		if n, err := w.Write([]byte(chunk)); n != len(chunk) || err != nil {
+			t.Fatalf("Write(%q) = %d, %v", chunk, n, err)
+		}
+	}
+	w.Flush()
+	want := "[#1] hello\n[#1] 10%20%30%\n[#1] forged access line\n"
+	if got := out.String(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if strings.Contains(out.String(), "\r") {
+		t.Errorf("carriage return survived into the log: %q", out.String())
+	}
+}
+
 func TestPrefixWriterLongLine(t *testing.T) {
 	var out syncBuffer
 	w := &prefixWriter{log: newLogger(&out), prefix: "> "}
