@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -93,6 +94,15 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Allow", http.MethodPost)
 		}
 		s.reply(w, r, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Browsers send Sec-Fetch-Site on every request and scripts cannot
+	// remove it. A page the operator visits can POST here (127.0.0.1 is
+	// reachable from the browser) and run the command; curl and webhook
+	// senders do not set this header.
+	if strings.EqualFold(r.Header.Get("Sec-Fetch-Site"), "cross-site") {
+		s.reply(w, r, http.StatusForbidden, "cross-site request rejected")
 		return
 	}
 
