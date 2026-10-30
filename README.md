@@ -178,8 +178,10 @@ background (`nohup ./server >server.log 2>&1 &`).
 
 hook logs to stderr: one access line per request (time, client, method, path,
 status, and for runs the run number, duration and exit code), and the
-command's output with each line prefixed by its run number. `-q` turns off
-the command's output; the access log stays.
+command's output with each line prefixed by its run number. Carriage returns
+in that output are dropped, so a progress bar or an untrusted payload can't
+move the cursor back and overwrite the `[#N]` prefix. `-q` turns off the
+command's output; the access log stays.
 
 ```
 2026-06-25T18:40:03Z listening on http://127.0.0.1:9000/deploy, running ["./deploy.sh"]

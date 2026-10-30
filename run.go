@@ -160,6 +160,9 @@ func (b *capBuffer) Write(p []byte) (int, error) {
 
 // prefixWriter forwards complete lines to the log, each prefixed with the
 // run number so that output from different runs can be told apart.
+// Carriage returns are dropped. A `\r` in the command's output (a progress
+// bar, or a payload the command prints) would otherwise move the cursor to
+// column 0 and overwrite the run prefix.
 type prefixWriter struct {
 	log    *logger
 	prefix string
@@ -167,6 +170,16 @@ type prefixWriter struct {
 }
 
 func (w *prefixWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	if bytes.IndexByte(p, '\r') >= 0 {
+		stripped := make([]byte, 0, len(p))
+		for _, c := range p {
+			if c != '\r' {
+				stripped = append(stripped, c)
+			}
+		}
+		p = stripped
+	}
 	w.buf = append(w.buf, p...)
 	for {
 		i := bytes.IndexByte(w.buf, '\n')
@@ -180,7 +193,7 @@ func (w *prefixWriter) Write(p []byte) (int, error) {
 		w.log.Line(w.prefix, w.buf)
 		w.buf = w.buf[:0]
 	}
-	return len(p), nil
+	return n, nil
 }
 
 // Flush writes out a last line that had no trailing newline.
