@@ -95,13 +95,16 @@ func (s *server) execute(ctx context.Context, j *job) result {
 			fmt.Fprintf(capture, "hook: %s\n", msg)
 		}
 	}
+	// kill() returns success for a zombie, so a deadline that passes in the
+	// moment after the command has already exited must not be reported as a
+	// timeout. Only a process that actually died from the signal counts.
 	switch {
 	case cmd.ProcessState == nil:
 		note("%v", err)
-	case killed.Load() && errors.Is(ctx.Err(), context.DeadlineExceeded):
+	case timeoutOverride(cmd.ProcessState, killed.Load(), ctx.Err()):
 		res.exitCode = exitTimeout
 		note("timed out after %s, killed", s.cfg.timeout)
-	case killed.Load():
+	case killed.Load() && signaled(cmd.ProcessState):
 		note("killed, hook is shutting down")
 	case errors.Is(err, exec.ErrWaitDelay):
 		note("command exited but left its output open; a background process should redirect its output")
@@ -124,6 +127,19 @@ func exitCode(ps *os.ProcessState) int {
 		return code
 	}
 	return signalExitCode(ps)
+}
+
+// signaled reports whether ps died from a signal. A process that has already
+// exited on its own is not signaled, even though kill still returns success
+// for the zombie it left behind.
+func signaled(ps *os.ProcessState) bool {
+	return ps != nil && ps.ExitCode() < 0
+}
+
+// timeoutOverride reports whether hook's timeout kill is what ended the
+// process, as opposed to a deadline that merely raced a normal exit.
+func timeoutOverride(ps *os.ProcessState, killed bool, ctxErr error) bool {
+	return killed && signaled(ps) && errors.Is(ctxErr, context.DeadlineExceeded)
 }
 
 // capBuffer keeps the first max bytes written to it and drops the rest.

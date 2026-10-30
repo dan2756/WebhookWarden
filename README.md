@@ -157,7 +157,9 @@ rather than queued; with `--max-queue 2`, at most one waits behind it. With
 `--timeout 5m` kills a run that takes longer than that. The command runs in
 its own process group and the whole group is killed (`SIGKILL`), so
 `sh -c 'make deploy'` doesn't leave `make` and its children behind. A run
-killed this way reports exit code `124`.
+killed this way reports exit code `124`. A command that has already exited
+keeps its own status: the deadline can pass in the moment between that exit
+and hook noticing it, and that race is not reported as a timeout.
 
 `--max-body` (default `10MB`) rejects larger request bodies with `413` before
 anything runs. Sizes take an optional `B`, `KB`, `MB` or `GB` suffix (binary
