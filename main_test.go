@@ -3,7 +3,9 @@ package main
 import (
 	"errors"
 	"flag"
+	"net"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -55,6 +57,48 @@ func TestParseArgsFlags(t *testing.T) {
 	}
 	if cfg.path != "/deploy" {
 		t.Errorf("path = %q, want /deploy", cfg.path)
+	}
+}
+
+func TestParseArgsBind(t *testing.T) {
+	cfg, err := parseArgs([]string{"--bind", "[::1]", "--port", "0", "true"}, noenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.bind != "::1" || !isLoopback(cfg.bind) {
+		t.Fatalf("bind = %q, loopback %v; want ::1 and loopback", cfg.bind, isLoopback(cfg.bind))
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.bind, strconv.Itoa(cfg.port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
+
+	cfg, err = parseArgs([]string{"--bind", "[127.0.0.1]", "true"}, noenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.bind != "127.0.0.1" || !isLoopback(cfg.bind) {
+		t.Errorf("bind = %q, loopback %v", cfg.bind, isLoopback(cfg.bind))
+	}
+
+	cfg, err = parseArgs([]string{"--bind", "[::]", "true"}, noenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.bind != "::" || isLoopback(cfg.bind) {
+		t.Errorf("bind = %q, loopback %v; want :: and not loopback", cfg.bind, isLoopback(cfg.bind))
+	}
+
+	for _, host := range []string{"127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"} {
+		if !isLoopback(host) {
+			t.Errorf("%s should be loopback", host)
+		}
+	}
+	for _, host := range []string{"0.0.0.0", "::", "192.0.2.1", "[::1]"} {
+		if isLoopback(host) {
+			t.Errorf("%s should not be loopback before brackets are stripped", host)
+		}
 	}
 }
 
@@ -114,6 +158,8 @@ func TestParseArgsErrors(t *testing.T) {
 		{"--path", "/deploy\x00", "true"},
 		{"--path", "/deploy?x=1", "true"},
 		{"--path", "/deploy#frag", "true"},
+		{"--bind", "", "true"},
+		{"--bind", "[]", "true"},
 	} {
 		if _, err := parseArgs(args, noenv); err == nil {
 			t.Errorf("parseArgs(%q) succeeded, want error", args)

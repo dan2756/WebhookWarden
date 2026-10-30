@@ -33,7 +33,7 @@ small JSON status document; other methods get 405.
 Flags:
   -p, --port N          port to listen on (default 9000)
       --bind ADDR       address to bind (default 127.0.0.1; 0.0.0.0 exposes
-                        hook to the whole network)
+                        hook to the whole network; IPv6 may be written [::1])
       --path PATH       only serve PATH, a URL path with no query or fragment;
                         any other path is 404
       --secret S        require a valid HMAC-SHA256 signature (or set HOOK_SECRET)
@@ -186,6 +186,11 @@ func parseArgs(args []string, getenv func(string) string) (*config, error) {
 	if cfg.shutdown < 0 {
 		return nil, fmt.Errorf("invalid --shutdown-timeout %s", cfg.shutdown)
 	}
+	bind, err := normalizeBind(cfg.bind)
+	if err != nil {
+		return nil, err
+	}
+	cfg.bind = bind
 	if cfg.path != "" && !strings.HasPrefix(cfg.path, "/") {
 		return nil, fmt.Errorf("--path must start with /, got %q", cfg.path)
 	}
@@ -213,6 +218,22 @@ func parseArgs(args []string, getenv func(string) string) (*config, error) {
 		cfg.argv = rest
 	}
 	return cfg, nil
+}
+
+// normalizeBind accepts the host from --bind. IPv6 addresses are often
+// written with brackets, as in [::1], but net.JoinHostPort adds brackets
+// itself, so a second pair would be listened on as [[::1]]:port and fail.
+// An empty address would listen on every interface; reject it instead of
+// guessing that was intended.
+func normalizeBind(host string) (string, error) {
+	orig := host
+	if len(host) >= 2 && host[0] == '[' && host[len(host)-1] == ']' {
+		host = host[1 : len(host)-1]
+	}
+	if host == "" {
+		return "", fmt.Errorf("invalid --bind %q", orig)
+	}
+	return host, nil
 }
 
 func isLoopback(host string) bool {
