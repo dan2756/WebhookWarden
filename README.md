@@ -73,6 +73,7 @@ already in `known_hosts`, a `NOPASSWD` sudo rule.
 | `500`  | `--sync` and the command exited non-zero                                   |
 | `400`  | the path contains a control character, or the body could not be read       |
 | `401`  | `--secret` is set and the signature is missing or wrong                    |
+| `403`  | a cross-site browser POST (`Sec-Fetch-Site: cross-site`)                   |
 | `404`  | `--path` is set and this is a different path                               |
 | `405`  | not a POST, and not a GET or HEAD of the status path                       |
 | `413`  | body larger than `--max-body`                                              |
@@ -121,6 +122,12 @@ whenever hook is reachable from outside, or better, keep it on localhost
 behind the reverse proxy that already terminates TLS for you (see
 [examples](#examples)). The status endpoint is never authenticated; it shows
 only counts and the last exit code.
+
+A page you visit can still open a connection to a loopback port. Browsers
+mark that POST with `Sec-Fetch-Site: cross-site` and do not let the page
+remove the header, so hook answers `403` and does not run the command.
+`curl`, GitHub, and other non-browser clients do not send the header. `GET`
+and `HEAD` of the status path are unchanged.
 
 ### Signatures
 

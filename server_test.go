@@ -205,6 +205,55 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+func TestCrossSitePostRejected(t *testing.T) {
+	s, logs := newTestServer(t, config{sync: true, secret: "s3cret", argv: []string{"echo", "ran"}})
+	body := `{"ref":"refs/heads/main"}`
+	signed := http.Header{
+		"Sec-Fetch-Site":      {"cross-site"},
+		"X-Hub-Signature-256": {"sha256=" + sign("s3cret", body)},
+	}
+	w := do(s, "POST", "/", body, signed)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("cross-site POST: status %d, want 403", w.Code)
+	}
+	if w.Body.String() != "cross-site request rejected\n" {
+		t.Errorf("body = %q", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "ran") || strings.Contains(logs.String(), "ran") {
+		t.Errorf("command ran for a cross-site POST:\n%s", logs.String())
+	}
+
+	// Case does not matter; browsers send the lowercase token.
+	w = do(s, "POST", "/", body, http.Header{"Sec-Fetch-Site": {"Cross-Site"}})
+	if w.Code != http.StatusForbidden {
+		t.Errorf("Cross-Site: status %d, want 403", w.Code)
+	}
+
+	// Status reads have no side effect, and other Fetch Metadata values
+	// are how a same-site page or a user-initiated request is labeled.
+	if w := do(s, "GET", "/", "", http.Header{"Sec-Fetch-Site": {"cross-site"}}); w.Code != 200 {
+		t.Errorf("cross-site GET: status %d, want 200", w.Code)
+	}
+	for _, site := range []string{"", "none", "same-origin", "same-site"} {
+		h := http.Header{}
+		if site != "" {
+			h.Set("Sec-Fetch-Site", site)
+		}
+		w := do(s, "POST", "/", body, h)
+		if w.Code != 401 {
+			t.Errorf("Sec-Fetch-Site %q: status %d, want 401 (unsigned, but not forbidden)", site, w.Code)
+		}
+	}
+	good := http.Header{"Sec-Fetch-Site": {"same-origin"}, "X-Hub-Signature-256": {"sha256=" + sign("s3cret", body)}}
+	if w := do(s, "POST", "/", body, good); w.Code != 200 || w.Body.String() != "ran\n" {
+		t.Errorf("same-origin signed POST: status %d body %q", w.Code, w.Body.String())
+	}
+	s.wait()
+	if st := s.status(); st.Runs != 1 {
+		t.Errorf("runs = %d, want 1", st.Runs)
+	}
+}
+
 func TestSecretRequired(t *testing.T) {
 	s, _ := newTestServer(t, config{secret: "s3cret"})
 	body := `{"ref":"refs/heads/main"}`
