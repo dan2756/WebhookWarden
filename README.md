@@ -98,7 +98,8 @@ above. `last_exit_code` and `last_run` (when the last run finished) are
 With `--sync`, hook waits for the command and answers with its combined
 stdout and stderr: `200` if it exited 0, `500` otherwise. The exit code is in
 the `X-Hook-Exit-Code` header either way. Output beyond 1 MB is cut off in the
-response (the log still gets all of it).
+response (the log still gets all of it). A note from hook, such as a timeout,
+is kept after that cut-off so the reason is not lost in the command's output.
 
 ```console
 $ hook --sync 'git -C /srv/site pull --ff-only'

@@ -81,6 +81,37 @@ func TestShutdownKillsAfterTimeout(t *testing.T) {
 	}
 }
 
+func TestSyncNoteKeptWhenOutputHitsCap(t *testing.T) {
+	// The command writes one byte past the capture limit and exits, but a
+	// background sleep keeps stdout open. The note about that has to survive
+	// in the response: it is hook's own text, not more command output.
+	pidfile := filepath.Join(t.TempDir(), "pid")
+	script := "head -c " + strconv.Itoa(maxCapture+1) + " /dev/zero | tr '\\0' x; sleep 30 & echo $! > " + pidfile
+	killPidfileOnCleanup(t, pidfile)
+
+	s, _ := newTestServer(t, config{sync: true, quiet: true, argv: []string{"sh", "-c", script}})
+	w := do(s, "POST", "/", "", nil)
+	if w.Code != 200 || w.Header().Get("X-Hook-Exit-Code") != "0" {
+		t.Fatalf("status %d, exit %q; want 200 and 0", w.Code, w.Header().Get("X-Hook-Exit-Code"))
+	}
+	body := w.Body.String()
+	note := "hook: command exited but left its output open; a background process should redirect its output\n"
+	if !strings.Contains(body, note) {
+		tail := body
+		if len(tail) > 400 {
+			tail = tail[len(tail)-400:]
+		}
+		t.Fatalf("diagnostic note missing from capped output, tail:\n%s", tail)
+	}
+	if !strings.HasSuffix(body, "hook: output truncated to "+strconv.Itoa(maxCapture)+" bytes\n") {
+		t.Fatalf("truncation notice missing, tail:\n%s", body[len(body)-200:])
+	}
+	// The note sits after the captured command output, not in place of it.
+	if i := strings.Index(body, note); i != maxCapture {
+		t.Fatalf("note starts at %d, want %d (right after the captured bytes)", i, maxCapture)
+	}
+}
+
 func TestTimeoutOnlyReportedWhenKilled(t *testing.T) {
 	// The command exits at once, but the background sleep holds its output
 	// open, so the deadline passes while hook is still reading it. Nothing
