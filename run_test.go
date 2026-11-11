@@ -40,6 +40,54 @@ func TestPrefixWriterCarriageReturn(t *testing.T) {
 	}
 }
 
+func TestPrefixWriterTerminalControls(t *testing.T) {
+	var out syncBuffer
+	w := &prefixWriter{log: newLogger(&out), prefix: "[#1] "}
+	chunks := []string{
+		"ok\n",
+		"\x1b[1G\x1b[2Kforged\b\b\b\n", // cursor home, clear line, backspaces
+		"\x1b]0;title\a\n",             // OSC window title
+		"a\x1b",                        // escape split across writes
+		"[31mred\x1b[0m\n",
+		"a\tb café ©\n",
+		"\xc2\x9b2Jcleared\n", // U+009B, the 8-bit form of CSI
+		"\xc2", "\x9b31mhidden", "\n",
+		"up\n\x1bMdown\n", // ESC M would move the cursor up a line
+		"\x1b[2Aearlier\n",
+		"a\fb\n",
+		"pre\x1b[31", // unfinished sequence must not leak on Flush
+	}
+	for _, chunk := range chunks {
+		if n, err := w.Write([]byte(chunk)); n != len(chunk) || err != nil {
+			t.Fatalf("Write(%q) = %d, %v", chunk, n, err)
+		}
+	}
+	w.Flush()
+	want := strings.Join([]string{
+		"[#1] ok",
+		"[#1] forged",
+		"[#1] ",
+		"[#1] ared",
+		"[#1] a\tb café ©",
+		"[#1] cleared",
+		"[#1] hidden",
+		"[#1] up",
+		"[#1] down",
+		"[#1] earlier",
+		"[#1] ab",
+		"[#1] pre",
+		"",
+	}, "\n")
+	if got := out.String(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	for _, bad := range []string{"\x1b", "\r", "\b", "\xc2\x9b"} {
+		if strings.Contains(out.String(), bad) {
+			t.Errorf("control %q survived into the log: %q", bad, out.String())
+		}
+	}
+}
+
 func TestPrefixWriterLongLine(t *testing.T) {
 	var out syncBuffer
 	w := &prefixWriter{log: newLogger(&out), prefix: "> "}
