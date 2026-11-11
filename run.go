@@ -169,27 +169,32 @@ func (b *capBuffer) addNote(s string) {
 
 // prefixWriter forwards complete lines to the log, each prefixed with the
 // run number so that output from different runs can be told apart.
-// Carriage returns are dropped. A `\r` in the command's output (a progress
-// bar, or a payload the command prints) would otherwise move the cursor to
-// column 0 and overwrite the run prefix.
+//
+// Bytes that can move the cursor are removed first. The prefix is added
+// only when a line is emitted, so a carriage return, a backspace, or an
+// escape sequence in the command's output (a progress bar, or a payload
+// the command prints) cannot overwrite that prefix or an earlier line.
 type prefixWriter struct {
 	log    *logger
 	prefix string
 	buf    []byte
+	esc    int // terminal-sequence state, carried across Write calls
 }
+
+// Terminal-sequence states for dropTerminalControls.
+const (
+	termNone = iota
+	termESC
+	termCSI
+	termOSC
+	termOSCEsc // ESC inside OSC, expecting '\' to end it
+	termOne    // one more byte belongs to the sequence (charset, SS3)
+	termC1     // saw 0xC2; the next byte may be a C1 control
+)
 
 func (w *prefixWriter) Write(p []byte) (int, error) {
 	n := len(p)
-	if bytes.IndexByte(p, '\r') >= 0 {
-		stripped := make([]byte, 0, len(p))
-		for _, c := range p {
-			if c != '\r' {
-				stripped = append(stripped, c)
-			}
-		}
-		p = stripped
-	}
-	w.buf = append(w.buf, p...)
+	w.buf = dropTerminalControls(w.buf, p, &w.esc)
 	for {
 		i := bytes.IndexByte(w.buf, '\n')
 		if i < 0 {
@@ -205,8 +210,109 @@ func (w *prefixWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// dropTerminalControls appends src to dst with cursor-moving bytes removed.
+// Tabs and newlines are kept. Carriage returns, backspaces, other ASCII
+// controls and DEL are dropped. ANSI escapes (ESC ...) and C1 controls
+// (U+0080-U+009F, the UTF-8 bytes C2 80-C2 9F, including the 8-bit CSI)
+// are removed, even when a sequence is split across chunks. esc is the
+// state from the previous chunk.
+func dropTerminalControls(dst, src []byte, esc *int) []byte {
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		switch *esc {
+		case termNone:
+			switch {
+			case c == '\n' || c == '\t':
+				dst = append(dst, c)
+			case c == 0x1b:
+				*esc = termESC
+			case c == 0xc2:
+				*esc = termC1
+			case c < 0x20 || c == 0x7f:
+				// CR, backspace, form feed, bell, and the rest of C0.
+			default:
+				dst = append(dst, c)
+			}
+		case termESC:
+			switch c {
+			case '[':
+				*esc = termCSI
+			case ']':
+				*esc = termOSC
+			case '(', ')', '*', '+', '-', '.', '/', 'O':
+				*esc = termOne
+			case 0x1b:
+				*esc = termESC
+			case '\n':
+				*esc = termNone
+				dst = append(dst, c)
+			default:
+				// ESC plus one byte: ESC c, ESC D, ESC M, ESC 7, ...
+				*esc = termNone
+			}
+		case termCSI:
+			switch {
+			case c >= 0x40 && c <= 0x7e:
+				*esc = termNone
+			case c == '\n':
+				*esc = termNone
+				dst = append(dst, c)
+			case c == 0x1b:
+				*esc = termESC
+			case c < 0x20 || c >= 0x7f:
+				// Not a CSI parameter. End the sequence and handle c.
+				*esc = termNone
+				i--
+			}
+		case termOSC:
+			switch c {
+			case 0x07: // BEL ends OSC
+				*esc = termNone
+			case 0x1b: // possible ST (ESC \)
+				*esc = termOSCEsc
+			case '\n':
+				*esc = termNone
+				dst = append(dst, c)
+			}
+		case termOSCEsc:
+			if c == '\\' {
+				*esc = termNone
+				continue
+			}
+			*esc = termESC
+			i--
+		case termOne:
+			*esc = termNone
+			if c == 0x1b || c == '\n' {
+				i--
+			}
+		case termC1:
+			*esc = termNone
+			if c >= 0x80 && c <= 0x9f {
+				switch c {
+				case 0x9b: // CSI
+					*esc = termCSI
+				case 0x9d: // OSC
+					*esc = termOSC
+				}
+				continue
+			}
+			// 0xC2 started a character that is not a C1 control (for
+			// example U+00A9, ©). Keep it.
+			dst = append(dst, 0xc2)
+			i--
+		}
+	}
+	return dst
+}
+
 // Flush writes out a last line that had no trailing newline.
 func (w *prefixWriter) Flush() {
+	// A trailing 0xC2 with no second byte is not a control sequence.
+	if w.esc == termC1 {
+		w.buf = append(w.buf, 0xc2)
+		w.esc = termNone
+	}
 	if len(w.buf) > 0 {
 		w.log.Line(w.prefix, w.buf)
 		w.buf = nil
