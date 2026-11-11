@@ -117,7 +117,9 @@ can reach it. `--bind 0.0.0.0` (or `::`) exposes it to every network the
 machine is on, and then anyone who can reach the port can run your command.
 An empty `--bind` is rejected: it would listen on every interface too. An
 IPv6 address may be written with brackets (`--bind [::1]`), which is still
-loopback and does not warn. Use `--secret`
+loopback and does not warn. `--bind` is only the address; a value that
+includes a port (`127.0.0.1:9000`, `[::1]:9000`) is rejected so it is not
+joined into an unusable listen address. Set the port with `--port`. Use `--secret`
 whenever hook is reachable from outside, or better, keep it on localhost
 behind the reverse proxy that already terminates TLS for you (see
 [examples](#examples)). The status endpoint is never authenticated; it shows
@@ -237,7 +239,7 @@ exit status, or:
 | Flag                 | Default        | Description                                        |
 |----------------------|----------------|----------------------------------------------------|
 | `-p`, `--port`       | `9000`         | port to listen on                                  |
-| `--bind`             | `127.0.0.1`    | address to listen on; `0.0.0.0` exposes hook, `[::1]` is loopback |
+| `--bind`             | `127.0.0.1`    | address to listen on, no port; `0.0.0.0` exposes hook, `[::1]` is loopback |
 | `--path`             |                | only accept this URL path, `404` for others        |
 | `--secret`           | `$HOOK_SECRET` | require a valid HMAC-SHA256 signature              |
 | `--sync`             |                | wait and respond with the command's output         |

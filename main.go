@@ -32,8 +32,9 @@ small JSON status document; other methods get 405.
 
 Flags:
   -p, --port N          port to listen on (default 9000)
-      --bind ADDR       address to bind (default 127.0.0.1; 0.0.0.0 exposes
-                        hook to the whole network; IPv6 may be written [::1])
+      --bind ADDR       address to bind, with no port (default 127.0.0.1;
+                        0.0.0.0 exposes hook to the whole network; IPv6 may
+                        be written [::1]; set the port with --port)
       --path PATH       only serve PATH, a URL path with no query or fragment;
                         any other path is 404
       --secret S        require a valid HMAC-SHA256 signature (or set HOOK_SECRET)
@@ -224,9 +225,14 @@ func parseArgs(args []string, getenv func(string) string) (*config, error) {
 // written with brackets, as in [::1], but net.JoinHostPort adds brackets
 // itself, so a second pair would be listened on as [[::1]]:port and fail.
 // An empty address would listen on every interface; reject it instead of
-// guessing that was intended.
+// guessing that was intended. A host:port value is rejected too: the port
+// is a separate flag, and leaving it in would make the listen address
+// something like 127.0.0.1:9000:9000.
 func normalizeBind(host string) (string, error) {
 	orig := host
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return "", fmt.Errorf("--bind %q includes a port; set it with --port", orig)
+	}
 	if len(host) >= 2 && host[0] == '[' && host[len(host)-1] == ']' {
 		host = host[1 : len(host)-1]
 	}

@@ -6,6 +6,7 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -90,6 +91,13 @@ func TestParseArgsBind(t *testing.T) {
 		t.Errorf("bind = %q, loopback %v; want :: and not loopback", cfg.bind, isLoopback(cfg.bind))
 	}
 
+	for _, host := range []string{"127.0.0.1:9000", "[::1]:9000", "localhost:80", ":80"} {
+		_, err = parseArgs([]string{"--bind", host, "true"}, noenv)
+		if err == nil || !strings.Contains(err.Error(), "--port") {
+			t.Errorf("--bind %s: got %v, want an error telling the user to use --port", host, err)
+		}
+	}
+
 	for _, host := range []string{"127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"} {
 		if !isLoopback(host) {
 			t.Errorf("%s should be loopback", host)
@@ -160,6 +168,8 @@ func TestParseArgsErrors(t *testing.T) {
 		{"--path", "/deploy#frag", "true"},
 		{"--bind", "", "true"},
 		{"--bind", "[]", "true"},
+		{"--bind", "127.0.0.1:9000", "true"},
+		{"--bind", "[::1]:9000", "true"},
 	} {
 		if _, err := parseArgs(args, noenv); err == nil {
 			t.Errorf("parseArgs(%q) succeeded, want error", args)
