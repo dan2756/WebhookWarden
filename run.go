@@ -92,7 +92,7 @@ func (s *server) execute(ctx context.Context, j *job) result {
 		msg := fmt.Sprintf(format, args...)
 		s.log.Printf("#%d: %s", j.id, msg)
 		if capture != nil {
-			fmt.Fprintf(capture, "hook: %s\n", msg)
+			capture.addNote(fmt.Sprintf("hook: %s\n", msg))
 		}
 	}
 	// kill() returns success for a zombie, so a deadline that passes in the
@@ -156,6 +156,15 @@ func (b *capBuffer) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	return b.buf.Write(p)
+}
+
+// addNote appends a short diagnostic from hook itself. It is not counted
+// against the capture limit and does not by itself mark the output
+// truncated: a command that already filled the buffer (a long build log
+// that then times out, or one that exits but leaves the pipe open) must
+// not swallow the reason.
+func (b *capBuffer) addNote(s string) {
+	b.buf.WriteString(s)
 }
 
 // prefixWriter forwards complete lines to the log, each prefixed with the
