@@ -60,17 +60,15 @@ func (s *server) statusPath() string {
 	return "/"
 }
 
-// pathHasCTL reports whether p contains an ASCII control character.
-// A decoded request path can: %0a is a newline and %00 is a NUL. A newline
-// splits the access log, and a NUL makes exec refuse the whole environment
-// so the command never starts.
+// pathHasCTL reports whether p contains a character that would break a log
+// line or an environment variable. A decoded request path can: %0a is a
+// newline and %00 is a NUL. A newline splits the access log, and a NUL
+// makes exec refuse the whole environment so the command never starts.
+// C1 controls (U+0080–U+009F, including U+0085 NEL) and the Unicode line
+// and paragraph separators split the line the same way once the log is
+// shown.
 func pathHasCTL(p string) bool {
-	for i := 0; i < len(p); i++ {
-		if p[i] < 0x20 || p[i] == 0x7f {
-			return true
-		}
-	}
-	return false
+	return strings.ContainsFunc(p, breaksLogLine)
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

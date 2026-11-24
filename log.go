@@ -20,7 +20,7 @@ func newLogger(w io.Writer) *logger {
 	return &logger{w: w, now: time.Now}
 }
 
-// Printf writes one timestamped line. Control characters in the message are
+// Printf writes one timestamped line. Characters that start a new line are
 // escaped so one event stays one line: a request path is decoded before it
 // is logged, and a %0a in that path would otherwise split the line in two.
 func (l *logger) Printf(format string, args ...any) {
@@ -29,28 +29,34 @@ func (l *logger) Printf(format string, args ...any) {
 	fmt.Fprintf(l.w, "%s %s\n", l.now().Format(time.RFC3339), oneLine(fmt.Sprintf(format, args...)))
 }
 
-// oneLine escapes ASCII control characters so s cannot break out of a log line.
+// breaksLogLine reports whether r starts a new line, or is a C1 control a
+// terminal would act on, when the log is written out. ASCII controls are
+// the usual case; U+0085 (NEL) and the Unicode line separators do the same.
+func breaksLogLine(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029
+}
+
+// oneLine escapes characters that would break s out of one log line.
 func oneLine(s string) string {
-	if !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+	if !strings.ContainsFunc(s, breaksLogLine) {
 		return s
 	}
 	var b strings.Builder
 	b.Grow(len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch c {
-		case '\n':
+	for _, r := range s {
+		switch {
+		case r == '\n':
 			b.WriteString(`\n`)
-		case '\r':
+		case r == '\r':
 			b.WriteString(`\r`)
-		case '\t':
+		case r == '\t':
 			b.WriteString(`\t`)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case breaksLogLine(r):
+			fmt.Fprintf(&b, `\u%04x`, r)
 		default:
-			if c < 0x20 || c == 0x7f {
-				fmt.Fprintf(&b, `\x%02x`, c)
-			} else {
-				b.WriteByte(c)
-			}
+			b.WriteRune(r)
 		}
 	}
 	return b.String()
