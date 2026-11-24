@@ -88,6 +88,33 @@ func TestPrefixWriterTerminalControls(t *testing.T) {
 	}
 }
 
+func TestPrefixWriterOSCStringTerminator(t *testing.T) {
+	var out syncBuffer
+	w := &prefixWriter{log: newLogger(&out), prefix: "[#1] "}
+	// U+009C (bytes C2 9C) is the 8-bit string terminator. It ends an OSC
+	// the same way BEL and ESC \ do, including when the two bytes arrive
+	// in different writes. Text after it is ordinary output.
+	chunks := []string{
+		"\x1b]0;title\xc2\x9cVISIBLE\x1b[2A\n",
+		"\x1b]8;;http://evil.example\xc2",
+		"\x9cafter\n",
+		"\x1b]0;title\xc2\nkept\n",
+	}
+	for _, chunk := range chunks {
+		if n, err := w.Write([]byte(chunk)); n != len(chunk) || err != nil {
+			t.Fatalf("Write(%q) = %d, %v", chunk, n, err)
+		}
+	}
+	w.Flush()
+	want := "[#1] VISIBLE\n[#1] after\n[#1] \n[#1] kept\n"
+	if got := out.String(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if strings.Contains(out.String(), "\x1b") || strings.Contains(out.String(), "title") || strings.Contains(out.String(), "evil") {
+		t.Errorf("OSC payload leaked: %q", out.String())
+	}
+}
+
 func TestPrefixWriterLongLine(t *testing.T) {
 	var out syncBuffer
 	w := &prefixWriter{log: newLogger(&out), prefix: "> "}

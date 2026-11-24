@@ -188,6 +188,7 @@ const (
 	termCSI
 	termOSC
 	termOSCEsc // ESC inside OSC, expecting '\' to end it
+	termOSCST  // 0xC2 inside OSC, expecting 0x9C (U+009C, 8-bit ST)
 	termOne    // one more byte belongs to the sequence (charset, SS3)
 	termC1     // saw 0xC2; the next byte may be a C1 control
 )
@@ -270,6 +271,8 @@ func dropTerminalControls(dst, src []byte, esc *int) []byte {
 				*esc = termNone
 			case 0x1b: // possible ST (ESC \)
 				*esc = termOSCEsc
+			case 0xc2: // possible 8-bit ST (U+009C)
+				*esc = termOSCST
 			case '\n':
 				*esc = termNone
 				dst = append(dst, c)
@@ -280,6 +283,14 @@ func dropTerminalControls(dst, src []byte, esc *int) []byte {
 				continue
 			}
 			*esc = termESC
+			i--
+		case termOSCST:
+			if c == 0x9c {
+				*esc = termNone
+				continue
+			}
+			// Not ST. The 0xC2 was ordinary OSC payload; handle c again.
+			*esc = termOSC
 			i--
 		case termOne:
 			*esc = termNone
