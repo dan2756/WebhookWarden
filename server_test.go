@@ -95,6 +95,27 @@ func TestPathControlCharsRejected(t *testing.T) {
 		t.Errorf("runs = %d, want 0", st.Runs)
 	}
 
+	// C1 controls and Unicode line separators split the line the same way a
+	// newline does, once a terminal shows the log. %c2%85 is U+0085 (NEL).
+	for _, target := range []string{"/%c2%85FORGED", "/%e2%80%a8FORGED", "/%e2%80%a9FORGED"} {
+		w = do(s, "POST", target, "", nil)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", target, w.Code)
+		}
+	}
+	out = logs.String()
+	if strings.Contains(out, "\u0085") || strings.Contains(out, "\u2028") || strings.Contains(out, "\u2029") {
+		t.Errorf("line break survived into the access log:\n%s", out)
+	}
+	for _, want := range []string{`POST /\u0085FORGED 400`, `POST /\u2028FORGED 400`, `POST /\u2029FORGED 400`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("access log is missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Count(out, "\n") != 5 {
+		t.Errorf("access log has %d lines, want 5:\n%s", strings.Count(out, "\n"), out)
+	}
+
 	// A matching path still runs; the check only refuses control characters.
 	if w := do(s, "POST", "/deploy", "", nil); w.Code != 200 || w.Body.String() != "ran\n" {
 		t.Errorf("POST /deploy: status %d body %q", w.Code, w.Body.String())

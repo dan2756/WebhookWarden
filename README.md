@@ -88,7 +88,9 @@ By default any path is accepted. `--path /deploy` restricts hook to that one
 path; everything else gets `404`. The flag is compared to the URL path, so it
 must start with `/` and cannot include a query string (`?`) or fragment (`#`):
 those are not part of the path and would never match. A path containing a
-control character, such as a newline from `%0a`, is rejected with `400`.
+control character is rejected with `400`: an ASCII control such as a newline
+from `%0a`, a C1 control such as U+0085 (NEL, `%c2%85`), or a Unicode line
+separator (U+2028, U+2029). Any of those would split the access log.
 `GET` or `HEAD` of `/` (or of `--path`) returns the status document shown
 above. `last_exit_code` and `last_run` (when the last run finished) are
 `null` until a run has finished.
