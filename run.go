@@ -196,19 +196,34 @@ const (
 func (w *prefixWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	w.buf = dropTerminalControls(w.buf, p, &w.esc)
-	for {
-		i := bytes.IndexByte(w.buf, '\n')
-		if i < 0 {
-			break
-		}
-		w.log.Line(w.prefix, w.buf[:i])
-		w.buf = w.buf[i+1:]
-	}
-	if len(w.buf) >= maxLine {
-		w.log.Line(w.prefix, w.buf)
-		w.buf = w.buf[:0]
-	}
+	w.emit()
 	return n, nil
+}
+
+// emit writes every complete line, and any run of maxLine bytes that has
+// not seen a newline yet. One Write can be larger than maxLine, so the cut
+// happens here rather than only between writes.
+func (w *prefixWriter) emit() {
+	for len(w.buf) > 0 {
+		if i := bytes.IndexByte(w.buf, '\n'); i >= 0 && i < maxLine {
+			w.log.Line(w.prefix, w.buf[:i])
+			w.buf = w.buf[i+1:]
+			continue
+		}
+		if len(w.buf) < maxLine {
+			return
+		}
+		n := maxLine
+		// Don't split a UTF-8 sequence. Continuation bytes are 10xxxxxx.
+		for n > 0 && n < len(w.buf) && w.buf[n]&0xc0 == 0x80 {
+			n--
+		}
+		if n == 0 {
+			n = maxLine
+		}
+		w.log.Line(w.prefix, w.buf[:n])
+		w.buf = w.buf[n:]
+	}
 }
 
 // dropTerminalControls appends src to dst with cursor-moving bytes removed.
