@@ -128,6 +128,32 @@ func TestPrefixWriterLongLine(t *testing.T) {
 	if got := out.String(); got != want {
 		t.Errorf("got %d bytes, want a %d byte line and then \"tail\"", len(got), maxLine)
 	}
+
+	// A single write with no newline is cut at the same bound. The extra
+	// bytes are their own line, not a tail on the first one.
+	out = syncBuffer{}
+	w = &prefixWriter{log: newLogger(&out), prefix: "> "}
+	if _, err := w.Write([]byte(strings.Repeat("y", maxLine+3))); err != nil {
+		t.Fatal(err)
+	}
+	w.Flush()
+	want = "> " + strings.Repeat("y", maxLine) + "\n> yyy\n"
+	if got := out.String(); got != want {
+		t.Errorf("single write: got %d bytes, want a %d byte line and then \"yyy\"", len(got), maxLine)
+	}
+
+	// The cut backs up so a multibyte character sitting on the boundary
+	// stays on the next line instead of being split.
+	out = syncBuffer{}
+	w = &prefixWriter{log: newLogger(&out), prefix: "> "}
+	if _, err := w.Write([]byte(strings.Repeat("x", maxLine-1) + "éMORE")); err != nil {
+		t.Fatal(err)
+	}
+	w.Flush()
+	want = "> " + strings.Repeat("x", maxLine-1) + "\n> éMORE\n"
+	if got := out.String(); got != want {
+		t.Errorf("utf-8 boundary: got %q, want the accented character intact on the next line", got)
+	}
 }
 
 func TestTimeoutOverride(t *testing.T) {
